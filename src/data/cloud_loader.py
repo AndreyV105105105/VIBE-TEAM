@@ -881,9 +881,11 @@ class YandexDiskLoader:
         """
         try:
             # Используем projection pushdown - загружаем только нужные колонки
-            needed_cols = ["item_id", "brand_id", "category", "subcategory"]
+            # ВАЖНО: brand_id может отсутствовать в некоторых файлах, поэтому он опционален
+            needed_cols = ["item_id"]  # item_id обязателен
+            optional_cols = ["brand_id", "category", "subcategory"]  # Эти колонки опциональны
             if include_embedding:
-                needed_cols.append("embedding")  # Добавляем embedding только если нужен
+                optional_cols.append("embedding")  # Добавляем embedding только если нужен
             
             # Пробуем загрузить как LazyFrame для оптимизации
             cache_path = Path(self.cache_dir)
@@ -895,13 +897,18 @@ class YandexDiskLoader:
                 
                 # Проверяем, какие колонки доступны
                 schema = lazy_df.collect_schema()
-                available_cols = [col for col in needed_cols if col in schema]
                 
-                if not available_cols:
-                    # Если нет нужных колонок, возвращаем пустой
-                    print(f"⚠ В marketplace/items.pq нет нужных колонок: {needed_cols}")
+                # Проверяем обязательные колонки
+                if "item_id" not in schema:
+                    print(f"⚠ В marketplace/items.pq нет обязательной колонки item_id")
                     print(f"   Доступные колонки: {list(schema.keys())}")
                     return pl.DataFrame().lazy()
+                
+                # Собираем доступные колонки (обязательные + опциональные)
+                available_cols = ["item_id"]  # item_id всегда есть
+                for col in optional_cols:
+                    if col in schema:
+                        available_cols.append(col)
                 
                 # Projection pushdown: выбираем только нужные колонки
                 lazy_df = lazy_df.select(available_cols)
@@ -937,8 +944,21 @@ class YandexDiskLoader:
                 print(f"⚠ marketplace/items.pq не в кэше. Рекомендуется закэшировать файл для оптимизации.")
                 df = self.read_parquet_from_url("marketplace/items.pq", normalize=False)
                 
-                # Выбираем только нужные колонки
-                available_cols = [col for col in needed_cols if col in df.columns]
+                # Проверяем обязательные колонки
+                if "item_id" not in df.columns:
+                    print(f"⚠ В marketplace/items.pq нет обязательной колонки item_id")
+                    print(f"   Доступные колонки: {list(df.columns)}")
+                    return pl.DataFrame().lazy() if use_lazy else pl.DataFrame()
+                
+                # Собираем доступные колонки (обязательные + опциональные)
+                available_cols = ["item_id"]  # item_id всегда есть
+                optional_cols = ["brand_id", "category", "subcategory"]
+                if include_embedding:
+                    optional_cols.append("embedding")
+                for col in optional_cols:
+                    if col in df.columns:
+                        available_cols.append(col)
+                
                 if available_cols:
                     df = df.select(available_cols)
                     
@@ -1043,8 +1063,21 @@ class YandexDiskLoader:
                 print(f"⚠ retail/items.pq не в кэше. Рекомендуется закэшировать файл для оптимизации.")
                 df = self.read_parquet_from_url("retail/items.pq", normalize=False)
                 
-                # Выбираем только нужные колонки
-                available_cols = [col for col in needed_cols if col in df.columns]
+                # Проверяем обязательные колонки
+                if "item_id" not in df.columns:
+                    print(f"⚠ В retail/items.pq нет обязательной колонки item_id")
+                    print(f"   Доступные колонки: {list(df.columns)}")
+                    return pl.DataFrame().lazy() if use_lazy else pl.DataFrame()
+                
+                # Собираем доступные колонки (обязательные + опциональные)
+                available_cols = ["item_id"]  # item_id всегда есть
+                optional_cols = ["brand_id", "category", "subcategory"]
+                if include_embedding:
+                    optional_cols.append("embedding")
+                for col in optional_cols:
+                    if col in df.columns:
+                        available_cols.append(col)
+                
                 if available_cols:
                     df = df.select(available_cols)
                     
