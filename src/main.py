@@ -231,20 +231,34 @@ def process_user(
                 if "user_id" in schema:
                     print(f"🔍 Фильтруем по user_id {user_id}...")
                     # Оптимизация: сначала фильтруем, потом выбираем колонки (projection pushdown)
+                    # Сначала проверяем, какие колонки доступны в схеме
+                    schema = marketplace_lazy.collect_schema()
+                    available_cols = list(schema.keys())
+                    
+                    # Собираем список колонок для select (только те, что есть в данных)
+                    select_cols = ["user_id", "item_id", "timestamp", "domain"]
+                    
+                    # Добавляем опциональные колонки только если они есть
+                    if "category_id" in available_cols:
+                        select_cols.append(pl.col("category_id").alias("category_id"))
+                    if "brand_id" in available_cols:
+                        select_cols.append(pl.col("brand_id").alias("brand_id"))
+                    if "action_type" in available_cols:
+                        select_cols.append(pl.col("action_type").alias("action_type"))
+                    if "subdomain" in available_cols:
+                        select_cols.append(pl.col("subdomain").alias("subdomain"))
+                    if "price" in available_cols:
+                        select_cols.append(pl.col("price").alias("price"))
+                    if "count" in available_cols:
+                        select_cols.append(pl.col("count").alias("count"))
+                    if "os" in available_cols:
+                        select_cols.append(pl.col("os").alias("os"))
+                    
                     user_marketplace_lazy = (
                         marketplace_lazy
                         .filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
-                        # Выбираем только нужные колонки для ускорения
-                        .select([
-                            "user_id", "item_id", "timestamp", "domain",
-                            pl.col("category_id").alias("category_id"),
-                            pl.col("brand_id").alias("brand_id"),
-                            pl.col("action_type").alias("action_type"),
-                            pl.col("subdomain").alias("subdomain"),
-                            pl.col("price").alias("price"),
-                            pl.col("count").alias("count"),
-                            pl.col("os").alias("os")
-                        ])
+                        # Выбираем только нужные колонки для ускорения (только те, что есть)
+                        .select(select_cols)
                     )
                     
                     # Проверяем тип timestamp перед сортировкой

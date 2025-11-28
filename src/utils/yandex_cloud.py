@@ -1,23 +1,39 @@
 """
 Утилита для получения и работы с Yandex Cloud API ключами.
 
-Использует прямые значения folder_id и api_key.
+Читает ключи из переменных окружения (.env файл) с fallback на значения по умолчанию.
 """
 
 from typing import Dict, Optional
+import os
 import requests
 import base64
+from pathlib import Path
 
-# Yandex Cloud API ключи
-YANDEX_CLOUD_FOLDER_ID = "b1gst3c7cskk2big5fqn"
-YANDEX_CLOUD_API_KEY = "AQVNxQ_-mwN1bNst5oDEaWiRvm5cSFOvq_MzLoIz"
+# Пытаемся загрузить переменные окружения из .env файла
+try:
+    from dotenv import load_dotenv
+    # Загружаем .env из корня проекта
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+    else:
+        # Пробуем загрузить из текущей директории
+        load_dotenv()
+except ImportError:
+    # python-dotenv не установлен, используем только переменные окружения системы
+    pass
+
+# Yandex Cloud API ключи (читаем из переменных окружения или используем значения по умолчанию)
+YANDEX_CLOUD_FOLDER_ID = os.getenv("YANDEX_CLOUD_FOLDER_ID", "b1gst3c7cskk2big5fqn")
+YANDEX_CLOUD_API_KEY = os.getenv("YANDEX_CLOUD_API_KEY", "AQVNxQ_-mwN1bNst5oDEaWiRvm5cSFOvq_MzLoIz")
 
 YANDEX_CLOUD_CONSOLE_URL = "https://console.cloud.yandex.ru/"
 
-# Яндекс Диск OAuth credentials
-YANDEX_DISK_CLIENT_ID = "c9e5ffe9548744f4bae6767417d6f5ce"
-YANDEX_DISK_CLIENT_SECRET = "dd033946a6d14099a18c1a40498628e8"
-YANDEX_DISK_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
+# Яндекс Диск OAuth credentials (читаем из переменных окружения или используем значения по умолчанию)
+YANDEX_DISK_CLIENT_ID = os.getenv("YANDEX_DISK_CLIENT_ID", "c9e5ffe9548744f4bae6767417d6f5ce")
+YANDEX_DISK_CLIENT_SECRET = os.getenv("YANDEX_DISK_CLIENT_SECRET", "dd033946a6d14099a18c1a40498628e8")
+YANDEX_DISK_REDIRECT_URI = os.getenv("YANDEX_DISK_REDIRECT_URI", "https://oauth.yandex.ru/verification_code")
 
 
 def get_yandex_cloud_config(
