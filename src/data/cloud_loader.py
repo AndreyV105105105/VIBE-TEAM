@@ -642,14 +642,19 @@ class YandexDiskLoader:
         self,
         file_list: Optional[List[str]] = None,
         limit: Optional[int] = None,
-        days: Optional[int] = None
+        days: Optional[int] = None,
+        user_id: Optional[str] = None
     ) -> pl.LazyFrame:
         """
         Загружает события платежей.
         
+        ОПТИМИЗАЦИЯ: Если указан user_id и файлы в кэше, использует predicate pushdown
+        для фильтрации ДО загрузки всех данных в память.
+        
         :param file_list: Список конкретных имен файлов для загрузки
         :param limit: Ограничение количества файлов
         :param days: Фильтровать данные за последние N дней (опционально)
+        :param user_id: ID пользователя для фильтрации (опционально, для оптимизации)
         :return: LazyFrame со всеми событиями
         """
         # Если передан список файлов, используем его
@@ -668,7 +673,9 @@ class YandexDiskLoader:
         
         # Загружаем файлы с оптимизацией для кэша
         import time
+        from src.data.data_parser import normalize_dataframe
         frames = []
+        lazy_frames = []
         cache_path = Path(self.cache_dir)
         
         # Проверяем, какие файлы уже в кэше
@@ -679,57 +686,123 @@ class YandexDiskLoader:
             if cache_file_path.exists():
                 cached_files[file_info['name']] = cache_file_path
         
-        # Если все файлы в кэше, загружаем параллельно
-        if len(cached_files) == len(events_files) and len(events_files) > 1:
-            # Параллельная загрузка из кэша
-            def load_cached_file(file_info):
-                file_path = f"payments/events/{file_info['name']}"
-                try:
-                    df = self.read_parquet_from_url(file_path, normalize=True, use_cache=True)
-                    if df.height > 0 and "user_id" in df.columns:
-                        return (file_info['name'], df)
-                except Exception as e:
-                    print(f"⚠ Ошибка при загрузке {file_info['name']} из кэша: {e}")
-                return None
-            
-            # Оптимизация: увеличиваем количество потоков для параллельной загрузки
-            max_workers = min(8, len(events_files), os.cpu_count() or 4)
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(load_cached_file, file_info): file_info for file_info in events_files}
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        frames.append(result[1])
-        else:
-            # Последовательная загрузка (если есть файлы не в кэше)
-            for idx, file_info in enumerate(events_files):
-                file_path = f"payments/events/{file_info['name']}"
-                try:
-                    # Задержка только для файлов не из кэша
-                    if file_info['name'] not in cached_files and idx > 0:
-                        time.sleep(0.5)
-                    
-                    df = self.read_parquet_from_url(file_path, normalize=True)
-                    # Проверяем, что DataFrame не пустой
-                    if df.height > 0:
-                        # Проверяем наличие колонки user_id
-                        if "user_id" in df.columns:
-                            # Диагностика: проверяем наличие amount/price
-                            if "amount" in df.columns:
-                                amount_sample = df.select(pl.col("amount")).head(3).to_series().to_list()
-                                print(f"   ✅ Загружено {df.height} строк, amount: {amount_sample}")
-                            elif "price" in df.columns:
-                                print(f"   ⚠ Файл содержит 'price' вместо 'amount'. Колонки: {df.columns}")
-                            frames.append(df)
-                        else:
-                            print(f"   ⚠ Файл {file_path} не содержит колонку 'user_id'. Колонки: {df.columns}")
-                    else:
-                        print(f"   ⚠ Файл {file_path} пустой")
-                except Exception as e:
-                    print(f"Ошибка при загрузке {file_path}: {e}")
-                    continue
+        # ОПТИМИЗАЦИЯ: Если указан user_id и все файлы в кэше, используем LazyFrame с predicate pushdown
+        use_lazy_optimization = user_id and len(cached_files) == len(events_files) and len(events_files) > 0
         
-        if not frames:
+        if use_lazy_optimization:
+            # Используем LazyFrame для predicate pushdown - фильтруем ДО загрузки
+            print(f"⚡ Используем predicate pushdown для user_id={user_id} (фильтрация ДО загрузки)")
+            for file_info in events_files:
+                file_path = f"payments/events/{file_info['name']}"
+                cache_file_path = cached_files.get(file_info['name'])
+                if cache_file_path and cache_file_path.exists():
+                    try:
+                        # Читаем как LazyFrame для predicate pushdown
+                        lazy_df = pl.scan_parquet(str(cache_file_path))
+                        
+                        # Нормализуем колонки на уровне LazyFrame (базовая нормализация)
+                        schema = lazy_df.collect_schema()
+                        
+                        # Переименовываем колонки если нужно
+                        rename_dict = {}
+                        if "price" in schema and "amount" not in schema:
+                            rename_dict["price"] = "amount"
+                        if "user_id" not in schema:
+                            # Пропускаем файлы без user_id
+                            continue
+                        
+                        if rename_dict:
+                            lazy_df = lazy_df.rename(rename_dict)
+                        
+                        # Добавляем domain если его нет
+                        if "domain" not in lazy_df.collect_schema():
+                            lazy_df = lazy_df.with_columns(pl.lit("payments").alias("domain"))
+                        
+                        # ПРИМЕНЯЕМ ФИЛЬТР ДО collect() - это и есть predicate pushdown!
+                        # Polars оптимизирует это и читает только нужные строки из Parquet
+                        lazy_df = lazy_df.filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
+                        
+                        lazy_frames.append(lazy_df)
+                        print(f"   ✅ Добавлен LazyFrame для {file_info['name']} с фильтром по user_id (predicate pushdown)")
+                    except Exception as e:
+                        print(f"⚠ Ошибка при создании LazyFrame для {file_info['name']}: {e}")
+                        # Fallback: загружаем как обычно
+                        try:
+                            df = self.read_parquet_from_url(file_path, normalize=True, use_cache=True)
+                            if df.height > 0 and "user_id" in df.columns:
+                                # Фильтруем после загрузки (медленнее, но работает)
+                                df = df.filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
+                                if df.height > 0:
+                                    frames.append(df)
+                        except Exception as e2:
+                            print(f"⚠ Ошибка при fallback загрузке {file_info['name']}: {e2}")
+            
+            # Объединяем LazyFrames
+            if lazy_frames:
+                combined = pl.concat(lazy_frames)
+                # Применяем нормализацию на уровне LazyFrame
+                # (нормализация будет применена при collect())
+                if days and days > 0:
+                    from datetime import datetime, timedelta
+                    cutoff_date = datetime.now() - timedelta(days=days)
+                    schema = combined.collect_schema()
+                    if "timestamp" in schema and schema["timestamp"] == pl.Datetime:
+                        combined = combined.filter(pl.col("timestamp") >= pl.lit(cutoff_date))
+                        print(f"📅 Фильтрация payments: загружены данные за последние {days} дней (с {cutoff_date.date()})")
+                return combined
+        else:
+            # Стандартная загрузка (если нет user_id или файлы не все в кэше)
+            # Если все файлы в кэше, загружаем параллельно
+            if len(cached_files) == len(events_files) and len(events_files) > 1:
+                # Параллельная загрузка из кэша
+                def load_cached_file(file_info):
+                    file_path = f"payments/events/{file_info['name']}"
+                    try:
+                        df = self.read_parquet_from_url(file_path, normalize=True, use_cache=True)
+                        if df.height > 0 and "user_id" in df.columns:
+                            return (file_info['name'], df)
+                    except Exception as e:
+                        print(f"⚠ Ошибка при загрузке {file_info['name']} из кэша: {e}")
+                    return None
+                
+                # Оптимизация: увеличиваем количество потоков для параллельной загрузки
+                max_workers = min(8, len(events_files), os.cpu_count() or 4)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(load_cached_file, file_info): file_info for file_info in events_files}
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result:
+                            frames.append(result[1])
+            else:
+                # Последовательная загрузка (если есть файлы не в кэше)
+                for idx, file_info in enumerate(events_files):
+                    file_path = f"payments/events/{file_info['name']}"
+                    try:
+                        # Задержка только для файлов не из кэша
+                        if file_info['name'] not in cached_files and idx > 0:
+                            time.sleep(0.5)
+                        
+                        df = self.read_parquet_from_url(file_path, normalize=True)
+                        # Проверяем, что DataFrame не пустой
+                        if df.height > 0:
+                            # Проверяем наличие колонки user_id
+                            if "user_id" in df.columns:
+                                # Диагностика: проверяем наличие amount/price
+                                if "amount" in df.columns:
+                                    amount_sample = df.select(pl.col("amount")).head(3).to_series().to_list()
+                                    print(f"   ✅ Загружено {df.height} строк, amount: {amount_sample}")
+                                elif "price" in df.columns:
+                                    print(f"   ⚠ Файл содержит 'price' вместо 'amount'. Колонки: {df.columns}")
+                                frames.append(df)
+                            else:
+                                print(f"   ⚠ Файл {file_path} не содержит колонку 'user_id'. Колонки: {df.columns}")
+                        else:
+                            print(f"   ⚠ Файл {file_path} пустой")
+                    except Exception as e:
+                        print(f"Ошибка при загрузке {file_path}: {e}")
+                        continue
+        
+        if not frames and not lazy_frames:
             # Возвращаем пустой LazyFrame с правильной схемой
             return pl.DataFrame({
                 "user_id": pl.Utf8,
@@ -740,7 +813,10 @@ class YandexDiskLoader:
             }).lazy()
         
         # Объединяем в LazyFrame
-        combined = pl.concat(frames).lazy()
+        if frames:
+            combined = pl.concat(frames).lazy()
+        else:
+            combined = pl.concat(lazy_frames)
         
         # Фильтруем по дате, если указано количество дней
         if days and days > 0:
@@ -786,6 +862,307 @@ class YandexDiskLoader:
     def load_brands(self) -> pl.DataFrame:
         """Загружает справочник брендов."""
         return self.read_parquet_from_url("brands.pq")
+    
+    def load_marketplace_items(
+        self,
+        brand_ids: Optional[List[str]] = None,
+        item_ids: Optional[List[str]] = None,
+        use_lazy: bool = True,
+        include_embedding: bool = False
+    ) -> pl.LazyFrame:
+        """
+        Загружает каталог товаров маркетплейса с оптимизацией.
+        
+        :param brand_ids: Список brand_id для фильтрации (predicate pushdown) - экономит память
+        :param item_ids: Список item_id для фильтрации (predicate pushdown) - экономит память
+        :param use_lazy: Использовать LazyFrame для отложенной загрузки
+        :param include_embedding: Загружать ли embedding (только если нужен, т.к. занимает много места)
+        :return: LazyFrame или DataFrame с товарами
+        """
+        try:
+            # Используем projection pushdown - загружаем только нужные колонки
+            needed_cols = ["item_id", "brand_id", "category", "subcategory"]
+            if include_embedding:
+                needed_cols.append("embedding")  # Добавляем embedding только если нужен
+            
+            # Пробуем загрузить как LazyFrame для оптимизации
+            cache_path = Path(self.cache_dir)
+            cache_file = cache_path / "marketplace_items.pq"
+            
+            if cache_file.exists():
+                # Загружаем из кэша с projection pushdown
+                lazy_df = pl.scan_parquet(str(cache_file))
+                
+                # Проверяем, какие колонки доступны
+                schema = lazy_df.collect_schema()
+                available_cols = [col for col in needed_cols if col in schema]
+                
+                if not available_cols:
+                    # Если нет нужных колонок, возвращаем пустой
+                    print(f"⚠ В marketplace/items.pq нет нужных колонок: {needed_cols}")
+                    print(f"   Доступные колонки: {list(schema.keys())}")
+                    return pl.DataFrame().lazy()
+                
+                # Projection pushdown: выбираем только нужные колонки
+                lazy_df = lazy_df.select(available_cols)
+                
+                # Predicate pushdown: фильтруем по brand_id и item_id ДО загрузки
+                # ВАЖНО: проверяем наличие колонки в available_cols (после select)
+                if brand_ids and "brand_id" in available_cols:
+                    try:
+                        brand_ids_str = [str(bid) for bid in brand_ids]
+                        lazy_df = lazy_df.filter(pl.col("brand_id").cast(pl.Utf8).is_in(brand_ids_str))
+                        print(f"⚡ Применен predicate pushdown: фильтрация по {len(brand_ids)} брендам ДО загрузки")
+                    except Exception as e:
+                        print(f"⚠ Ошибка фильтрации по brand_id: {e}. Пропускаем фильтрацию по brand_id.")
+                elif brand_ids:
+                    print(f"⚠ brand_id не найден в marketplace/items.pq. Доступные колонки: {available_cols}. Пропускаем фильтрацию по brand_id.")
+                
+                if item_ids and "item_id" in available_cols:
+                    try:
+                        item_ids_str = [str(iid) for iid in item_ids]
+                        lazy_df = lazy_df.filter(pl.col("item_id").cast(pl.Utf8).is_in(item_ids_str))
+                        print(f"⚡ Применен predicate pushdown: фильтрация по {len(item_ids)} товарам ДО загрузки")
+                    except Exception as e:
+                        print(f"⚠ Ошибка фильтрации по item_id: {e}. Пропускаем фильтрацию по item_id.")
+                elif item_ids:
+                    print(f"⚠ item_id не найден в marketplace/items.pq. Доступные колонки: {available_cols}. Пропускаем фильтрацию по item_id.")
+                
+                if use_lazy:
+                    return lazy_df
+                else:
+                    return lazy_df.collect()
+            else:
+                # Загружаем из облака (только если нет в кэше)
+                print(f"⚠ marketplace/items.pq не в кэше. Рекомендуется закэшировать файл для оптимизации.")
+                df = self.read_parquet_from_url("marketplace/items.pq", normalize=False)
+                
+                # Выбираем только нужные колонки
+                available_cols = [col for col in needed_cols if col in df.columns]
+                if available_cols:
+                    df = df.select(available_cols)
+                    
+                    # Фильтруем по brand_id и item_id если указаны
+                    # ВАЖНО: проверяем наличие колонки в df.columns (после select)
+                    if brand_ids and "brand_id" in df.columns:
+                        try:
+                            brand_ids_str = [str(bid) for bid in brand_ids]
+                            df = df.filter(pl.col("brand_id").cast(pl.Utf8).is_in(brand_ids_str))
+                            print(f"⚡ Отфильтровано по {len(brand_ids)} брендам")
+                        except Exception as e:
+                            print(f"⚠ Ошибка фильтрации по brand_id: {e}. Пропускаем фильтрацию по brand_id.")
+                    elif brand_ids:
+                        print(f"⚠ brand_id не найден в marketplace/items.pq. Доступные колонки: {list(df.columns)}. Пропускаем фильтрацию по brand_id.")
+                    
+                    if item_ids and "item_id" in df.columns:
+                        try:
+                            item_ids_str = [str(iid) for iid in item_ids]
+                            df = df.filter(pl.col("item_id").cast(pl.Utf8).is_in(item_ids_str))
+                            print(f"⚡ Отфильтровано по {len(item_ids)} товарам")
+                        except Exception as e:
+                            print(f"⚠ Ошибка фильтрации по item_id: {e}. Пропускаем фильтрацию по item_id.")
+                    elif item_ids:
+                        print(f"⚠ item_id не найден в marketplace/items.pq. Доступные колонки: {list(df.columns)}. Пропускаем фильтрацию по item_id.")
+                
+                return df.lazy() if use_lazy else df
+                
+        except Exception as e:
+            print(f"⚠ Ошибка при загрузке marketplace/items.pq: {e}")
+            return pl.DataFrame().lazy()
+    
+    def load_retail_items(
+        self,
+        brand_ids: Optional[List[str]] = None,
+        item_ids: Optional[List[str]] = None,
+        use_lazy: bool = True,
+        include_embedding: bool = False
+    ) -> pl.LazyFrame:
+        """
+        Загружает каталог товаров ритейла с оптимизацией.
+        
+        :param brand_ids: Список brand_id для фильтрации (predicate pushdown) - экономит память
+        :param item_ids: Список item_id для фильтрации (predicate pushdown) - экономит память
+        :param use_lazy: Использовать LazyFrame для отложенной загрузки
+        :param include_embedding: Загружать ли embedding (только если нужен, т.к. занимает много места)
+        :return: LazyFrame или DataFrame с товарами
+        """
+        try:
+            # Используем projection pushdown - загружаем только нужные колонки
+            needed_cols = ["item_id", "brand_id", "category", "subcategory"]
+            if include_embedding:
+                needed_cols.append("embedding")  # Добавляем embedding только если нужен
+            
+            # Пробуем загрузить как LazyFrame для оптимизации
+            cache_path = Path(self.cache_dir)
+            cache_file = cache_path / "retail_items.pq"
+            
+            if cache_file.exists():
+                # Загружаем из кэша с projection pushdown
+                lazy_df = pl.scan_parquet(str(cache_file))
+                
+                # Проверяем, какие колонки доступны
+                schema = lazy_df.collect_schema()
+                available_cols = [col for col in needed_cols if col in schema]
+                
+                if not available_cols:
+                    print(f"⚠ В retail/items.pq нет нужных колонок: {needed_cols}")
+                    print(f"   Доступные колонки: {list(schema.keys())}")
+                    return pl.DataFrame().lazy()
+                
+                # Projection pushdown: выбираем только нужные колонки
+                lazy_df = lazy_df.select(available_cols)
+                
+                # Predicate pushdown: фильтруем по brand_id и item_id ДО загрузки
+                # ВАЖНО: проверяем наличие колонки в available_cols (после select)
+                if brand_ids and "brand_id" in available_cols:
+                    try:
+                        brand_ids_str = [str(bid) for bid in brand_ids]
+                        lazy_df = lazy_df.filter(pl.col("brand_id").cast(pl.Utf8).is_in(brand_ids_str))
+                        print(f"⚡ Применен predicate pushdown: фильтрация по {len(brand_ids)} брендам ДО загрузки")
+                    except Exception as e:
+                        print(f"⚠ Ошибка фильтрации по brand_id: {e}. Пропускаем фильтрацию по brand_id.")
+                elif brand_ids:
+                    print(f"⚠ brand_id не найден в retail/items.pq. Доступные колонки: {available_cols}. Пропускаем фильтрацию по brand_id.")
+                
+                if item_ids and "item_id" in available_cols:
+                    try:
+                        item_ids_str = [str(iid) for iid in item_ids]
+                        lazy_df = lazy_df.filter(pl.col("item_id").cast(pl.Utf8).is_in(item_ids_str))
+                        print(f"⚡ Применен predicate pushdown: фильтрация по {len(item_ids)} товарам ДО загрузки")
+                    except Exception as e:
+                        print(f"⚠ Ошибка фильтрации по item_id: {e}. Пропускаем фильтрацию по item_id.")
+                elif item_ids:
+                    print(f"⚠ item_id не найден в retail/items.pq. Доступные колонки: {available_cols}. Пропускаем фильтрацию по item_id.")
+                
+                if use_lazy:
+                    return lazy_df
+                else:
+                    return lazy_df.collect()
+            else:
+                # Загружаем из облака (только если нет в кэше)
+                print(f"⚠ retail/items.pq не в кэше. Рекомендуется закэшировать файл для оптимизации.")
+                df = self.read_parquet_from_url("retail/items.pq", normalize=False)
+                
+                # Выбираем только нужные колонки
+                available_cols = [col for col in needed_cols if col in df.columns]
+                if available_cols:
+                    df = df.select(available_cols)
+                    
+                    # Фильтруем по brand_id и item_id если указаны
+                    # ВАЖНО: проверяем наличие колонки в df.columns (после select)
+                    if brand_ids and "brand_id" in df.columns:
+                        try:
+                            brand_ids_str = [str(bid) for bid in brand_ids]
+                            df = df.filter(pl.col("brand_id").cast(pl.Utf8).is_in(brand_ids_str))
+                            print(f"⚡ Отфильтровано по {len(brand_ids)} брендам")
+                        except Exception as e:
+                            print(f"⚠ Ошибка фильтрации по brand_id: {e}. Пропускаем фильтрацию по brand_id.")
+                    elif brand_ids:
+                        print(f"⚠ brand_id не найден в retail/items.pq. Доступные колонки: {list(df.columns)}. Пропускаем фильтрацию по brand_id.")
+                    
+                    if item_ids and "item_id" in df.columns:
+                        try:
+                            item_ids_str = [str(iid) for iid in item_ids]
+                            df = df.filter(pl.col("item_id").cast(pl.Utf8).is_in(item_ids_str))
+                            print(f"⚡ Отфильтровано по {len(item_ids)} товарам")
+                        except Exception as e:
+                            print(f"⚠ Ошибка фильтрации по item_id: {e}. Пропускаем фильтрацию по item_id.")
+                    elif item_ids:
+                        print(f"⚠ item_id не найден в retail/items.pq. Доступные колонки: {list(df.columns)}. Пропускаем фильтрацию по item_id.")
+                
+                return df.lazy() if use_lazy else df
+                
+        except Exception as e:
+            print(f"⚠ Ошибка при загрузке retail/items.pq: {e}")
+            return pl.DataFrame().lazy()
+    
+    def load_payments_receipts(
+        self,
+        file_list: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        days: Optional[int] = None,
+        user_id: Optional[str] = None
+    ) -> pl.LazyFrame:
+        """
+        Загружает чеки из payments/receipts с детализацией товаров.
+        
+        :param file_list: Список конкретных имен файлов для загрузки
+        :param limit: Ограничение количества файлов
+        :param days: Количество дней для загрузки
+        :param user_id: ID пользователя для фильтрации (predicate pushdown)
+        :return: LazyFrame с чеками
+        """
+        # Если передан список файлов, используем его
+        if file_list:
+            events_files = [{"name": f, "type": "file"} for f in file_list]
+        else:
+            # Получаем список файлов через API (только если есть токен)
+            if not self.api_token:
+                return pl.DataFrame().lazy()
+            
+            events_files = self.list_files("payments/receipts")
+            
+            if limit:
+                events_files = events_files[:limit]
+        
+        # Если все файлы в кэше И передан user_id, используем predicate pushdown
+        cache_path = Path(self.cache_dir)
+        cached_files = [f for f in events_files if (cache_path / f"payments_receipts_{f['name']}").exists()]
+        
+        if user_id and len(cached_files) == len(events_files) and len(events_files) > 0:
+            print(f"⚡ Используем predicate pushdown для receipts user_id={user_id}")
+            lazy_frames = []
+            for file_info in events_files:
+                file_path = f"payments/receipts/{file_info['name']}"
+                cache_file_path = cache_path / file_path.replace("/", "_")
+                try:
+                    lazy_df = pl.scan_parquet(str(cache_file_path))
+                    schema = lazy_df.collect_schema()
+                    if "user_id" in schema:
+                        lazy_df = lazy_df.filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
+                        lazy_frames.append(lazy_df)
+                except Exception as e:
+                    print(f"⚠ Ошибка при создании LazyFrame для receipts {file_info['name']}: {e}")
+            
+            if lazy_frames:
+                combined = pl.concat(lazy_frames)
+                if days and days > 0:
+                    from datetime import datetime, timedelta
+                    cutoff_date = datetime.now() - timedelta(days=days)
+                    schema = combined.collect_schema()
+                    if "timestamp" in schema and schema["timestamp"] == pl.Datetime:
+                        combined = combined.filter(pl.col("timestamp") >= pl.lit(cutoff_date))
+                return combined
+        
+        # Стандартная загрузка
+        frames = []
+        for file_info in events_files:
+            file_path = f"payments/receipts/{file_info['name']}"
+            try:
+                df = self.read_parquet_from_url(file_path, normalize=False)
+                if df.height > 0 and "user_id" in df.columns:
+                    if user_id:
+                        df = df.filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
+                    if df.height > 0:
+                        frames.append(df)
+            except Exception as e:
+                print(f"⚠ Ошибка при загрузке {file_path}: {e}")
+                continue
+        
+        if not frames:
+            return pl.DataFrame().lazy()
+        
+        combined = pl.concat(frames).lazy()
+        
+        if days and days > 0:
+            from datetime import datetime, timedelta
+            cutoff_date = datetime.now() - timedelta(days=days)
+            schema = combined.collect_schema()
+            if "timestamp" in schema:
+                if schema["timestamp"] == pl.Datetime:
+                    combined = combined.filter(pl.col("timestamp") >= pl.lit(cutoff_date))
+        
+        return combined
     
     def load_users(self) -> pl.DataFrame:
         """

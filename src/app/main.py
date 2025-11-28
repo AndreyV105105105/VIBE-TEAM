@@ -222,6 +222,31 @@ if 'result' in st.session_state:
         st.header("Рекомендации продуктов")
         
         if result['recommendations']:
+            # Нормализация scores для прогресс-бара
+            # 
+            # КАК ВЫЧИСЛЯЮТСЯ SCORES:
+            # 1. ML модель (RandomForestRegressor): предсказывает релевантность продукта (обычно 0-1, но может быть больше)
+            # 2. Fallback алгоритм: комбинация базовых метрик (40%) + граф (35%) + паттерны (25%)
+            #    - Базовые метрики: num_payments, total_tx, avg_tx, num_views и т.д.
+            #    - Граф: PageRank, центральность узлов, плотность графа
+            #    - Паттерны: частота событий, сложность последовательностей
+            #    Scores могут быть > 1 (например, 9.00 для "Дебетовая карта")
+            # 3. Правила: score = сумма confidence для каждого паттерна (высокая=3, средняя=2, низкая=1)
+            #    Может суммироваться, если несколько паттернов указывают на один продукт
+            #
+            # st.progress() принимает значения от 0 до 1, поэтому нормализуем scores
+            max_score = max(rec['score'] for rec in result['recommendations'])
+            min_score = min(rec['score'] for rec in result['recommendations'])
+            
+            # Если все scores одинаковые или max_score = 0, используем относительную нормализацию
+            if max_score == min_score or max_score == 0:
+                # Используем относительную нормализацию: score / max_score
+                # Если max_score = 0, все будут 0
+                normalize_score = lambda s: s / max_score if max_score > 0 else 0.0
+            else:
+                # Min-max нормализация: (score - min_score) / (max_score - min_score)
+                normalize_score = lambda s: (s - min_score) / (max_score - min_score)
+            
             for i, rec in enumerate(result['recommendations'], 1):
                 with st.container():
                     col1, col2 = st.columns([3, 1])
@@ -235,8 +260,13 @@ if 'result' in st.session_state:
                         score = rec['score']
                         st.metric("Оценка", f"{score:.2f}")
                         
-                        # Прогресс-бар для визуализации оценки
-                        st.progress(score)
+                        # Прогресс-бар для визуализации оценки (нормализованный от 0 до 1)
+                        # st.progress() принимает значения от 0 до 1
+                        normalized_progress = normalize_score(score)
+                        st.progress(normalized_progress)
+                        
+                        # Показываем нормализованное значение для отладки (можно убрать)
+                        # st.caption(f"Нормализовано: {normalized_progress:.2f}")
                     
                     st.divider()
         else:
@@ -286,13 +316,26 @@ if 'result' in st.session_state:
             total_tx_display = f"${total_tx:,.2f}" if total_tx > 0 else "$0.00"
             
             # Дополнительная диагностика: показываем исходные значения
+            # Получаем название топ бренда из маппинга
+            top_brand_id = profile.get('top_brand_id') or profile.get('top_brand')
+            top_brand_display = 'Не указан'
+            if top_brand_id:
+                brands_map = result.get('brands_map', {})
+                brand_name = brands_map.get(str(top_brand_id), None)
+                if brand_name:
+                    top_brand_display = f"{brand_name} (ID: {top_brand_id})"
+                else:
+                    top_brand_display = f"ID: {top_brand_id}"
+            
             st.json({
                 "Средний чек": avg_tx_display,
                 "Общая сумма": total_tx_display,
                 "Дней активности": profile.get('days_active', 0),
                 "Уникальных товаров": profile.get('unique_items', 0),
                 "Регион": profile.get('region') if profile.get('region') else 'Не указан',
-                "Топ категория": profile.get('top_category') if profile.get('top_category') else 'Не указана'
+                "Топ категория": profile.get('top_category') if profile.get('top_category') else 'Не указана',
+                "Топ бренд": top_brand_display,
+                "Категория брендов": profile.get('top_brand_category') if profile.get('top_brand_category') else 'Не указана'
             })
             
             # Показываем диагностику если значения были отрицательными
@@ -396,9 +439,16 @@ if 'result' in st.session_state:
                             node_label = f"Кат: {data['category_id']}"
                     elif node_label.startswith('brand_'):
                         node_label = node_label.replace('brand_', '')
-                        # Показываем brand_id
+                        # Показываем название бренда, если доступно, иначе brand_id
                         if 'brand_id' in data:
-                            node_label = f"Бренд: {data['brand_id']}"
+                            brand_id = str(data['brand_id'])
+                            # Пробуем найти название в маппинге
+                            brands_map = result.get('brands_map', {})
+                            brand_name = brands_map.get(brand_id, None)
+                            if brand_name:
+                                node_label = f"Бренд: {brand_name}"
+                            else:
+                                node_label = f"Бренд: {brand_id}"
                     elif node_label == 'START':
                         node_label = 'СТАРТ'
                     
@@ -409,7 +459,15 @@ if 'result' in st.session_state:
                     # Формируем подсказку
                     tooltip = f"Тип: {node_type}\nСвязей: {degree}"
                     if 'amount' in data:
-                        tooltip += f"\nСумма: {data['amount']:.2f} ₽"
+                        tooltip += f"\nСумма: ${data['amount']:.2f}"
+                    if 'brand_id' in data:
+                        brand_id = str(data['brand_id'])
+                        brands_map = result.get('brands_map', {})
+                        brand_name = brands_map.get(brand_id, None)
+                        if brand_name:
+                            tooltip += f"\nБренд: {brand_name} (ID: {brand_id})"
+                        else:
+                            tooltip += f"\nБренд ID: {brand_id}"
                     
                     net.add_node(
                         str(node),

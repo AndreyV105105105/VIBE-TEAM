@@ -22,34 +22,22 @@ def generate_rule_from_pattern(
     :param user_context: Дополнительный контекст пользователя (регион, avg_tx и т.д.)
     :return: Правило в формате {"pattern": "...", "product": "...", "reason": "..."}
     """
-    context_text = ""
+    # Сжатый контекст (только ключевые метрики)
+    context_parts = []
     if user_context:
-        context_text = f"\nКонтекст пользователя:\n"
-        context_text += f"- Регион: {user_context.get('region', 'неизвестен')}\n"
-        context_text += f"- Средний чек: {user_context.get('avg_tx', 0):.0f} ₽\n"
-        context_text += f"- Активность: {user_context.get('days_active', 0)} дней\n"
+        region = user_context.get('region', '?')
+        avg_tx = user_context.get('avg_tx', 0)
+        if region != '?':
+            context_parts.append(f"Р:{region}")
+        if avg_tx > 0:
+            context_parts.append(f"Чек:${avg_tx:.0f}")
     
-    prompt = f"""На основе паттерна поведения пользователя определи, какой финансовый продукт ПСБ ему подходит.
-
-Паттерн: {pattern}
-{context_text}
-
-Доступные продукты ПСБ:
-- Ипотека
-- Кредитная карта
-- Вклад
-- Кредит
-- Дебетовая карта
-
-Ответь в формате JSON:
-{{
-  "product": "название продукта",
-  "confidence": "высокая/средняя/низкая",
-  "reason": "краткое объяснение, почему этот продукт подходит"
-}}"""
+    context_text = "|" + "|".join(context_parts) if context_parts else ""
     
-    instructions = """Ты эксперт по рекомендательным системам для банков. 
-Анализируй паттерны поведения клиентов и рекомендуй подходящие финансовые продукты."""
+    # Максимально сжатый промпт
+    prompt = f"Паттерн:{pattern}{context_text}|Продукт? JSON:{{product,confidence,reason}}"
+    
+    instructions = "Эксперт банковских рекомендаций. Паттерн → продукт (Ипотека/Кредитка/Вклад/Кредит/Дебет)."
     
     try:
         response = call_yandex_gpt(

@@ -39,17 +39,34 @@ def extract_sequences(events: pl.DataFrame) -> List[str]:
                 if event_type == "click":
                     domain = "offers"
         
-        # Кодируем события
+        # Кодируем события с учетом action_type и domain
+        action_type = row.get("action_type", "")
+        
         if domain == "marketplace" or domain == "retail":
-            seq.append("V")  # View
-        elif domain == "payments":
-            seq.append("P")  # Pay
-        elif domain == "offers":
-            event_type = row.get("event_type", "")
-            if event_type == "click":
+            # Детальная кодировка для marketplace и retail
+            if action_type == "view":
+                seq.append("V")  # View
+            elif action_type == "click":
                 seq.append("C")  # Click
+            elif action_type == "add_to_cart":
+                seq.append("A")  # Add to cart
+            elif action_type == "order":
+                seq.append("O")  # Order
             else:
                 seq.append("V")  # По умолчанию view
+        elif domain == "payments":
+            seq.append("P")  # Pay/Transaction
+        elif domain == "receipts":
+            seq.append("R")  # Receipt (детализированная покупка)
+        elif domain == "offers":
+            if action_type == "click":
+                seq.append("C")  # Click
+            elif action_type == "impression":
+                seq.append("I")  # Impression
+            else:
+                seq.append("V")  # По умолчанию view
+        else:
+            seq.append("?")  # Unknown domain
     
     return seq
 

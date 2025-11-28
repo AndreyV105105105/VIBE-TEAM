@@ -21,27 +21,30 @@ _explanation_cache: Dict[str, str] = {}
 
 def build_prompt(profile: Dict, product: str) -> str:
     """
-    Строит промпт для YandexGPT на основе профиля пользователя.
+    Строит компактный промпт для YandexGPT (оптимизирован для экономии токенов).
     
     :param profile: Профиль пользователя (регион, avg_tx, паттерны и т.д.)
     :param product: Название рекомендуемого продукта
-    :return: Текст промпта
+    :return: Текст промпта (сжатый)
     """
-    # Извлекаем ключевые данные из профиля (без сырых событий)
-    region = profile.get("region", "неизвестен")
+    # Извлекаем только ключевые данные (минимум токенов)
+    region = profile.get("region", "?")
     avg_tx = profile.get("avg_tx", 0)
-    num_views = profile.get("num_views", 0)
     num_payments = profile.get("num_payments", 0)
-    pattern = profile.get("pattern", "неизвестен")
     
-    prompt = f"""Клиент из региона {region}, 
-средний чек ${avg_tx:.2f}, 
-количество просмотров: {num_views},
-количество платежей: {num_payments},
-поведенческий паттерн: {pattern}.
-
-Почему ему подходит продукт «{product}»? 
-Ответь коротко, по-русски, как консультант ПСБ."""
+    # Категория (только одна, самая важная)
+    top_brand_category = profile.get("top_brand_category")
+    top_category = profile.get("top_category")
+    category = top_brand_category or top_category or ""
+    
+    # Сжатый формат: только ключевые метрики
+    prompt = f"Клиент: {region}, чек ${avg_tx:.0f}, платежей {num_payments}"
+    if category:
+        # Сокращаем длинные названия категорий
+        cat_short = category[:30] if len(category) > 30 else category
+        prompt += f", кат: {cat_short}"
+    
+    prompt += f"\n\nПочему подходит «{product}»? Ответ: 1-2 предложения."
     
     return prompt
 
@@ -77,10 +80,10 @@ def explain_with_yandexgpt(
         # Строим промпт
         prompt = build_prompt(profile, product)
         
-        # Вызываем YandexGPT Responses API
+        # Вызываем YandexGPT Responses API (сжатые инструкции)
         explanation = call_yandex_gpt(
             input_text=prompt,
-            instructions="Ты опытный консультант ПСБ, который объясняет клиентам, почему им подходит тот или иной финансовый продукт. Отвечай коротко, понятно и по-русски.",
+            instructions="Консультант ПСБ. Ответ: 1-2 предложения, по-русски.",
             temperature=0.3
         )
         

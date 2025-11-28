@@ -159,30 +159,22 @@ class NBOModel:
         :param profile: Профиль пользователя
         :return: Название рекомендованного продукта
         """
-        # Формируем описание профиля
-        profile_text = f"""
-Профиль пользователя:
-- Просмотров: {profile.get('num_views', 0)}
-- Платежей: {profile.get('num_payments', 0)}
-- Сумма транзакций: {profile.get('total_tx', 0)}
-- Средний платеж: {profile.get('avg_tx', 0)}
-- Дней активности: {profile.get('days_active', 0)}
-- Уникальных товаров: {profile.get('unique_items', 0)}
-- Топ категория: {profile.get('top_category', 'неизвестно')}
-- Топ бренд: {profile.get('top_brand', 'неизвестно')}
-"""
+        # Сжатый промпт (только ключевые метрики)
+        avg_tx = profile.get('avg_tx', 0)
+        num_payments = profile.get('num_payments', 0)
+        top_category = profile.get('top_category') or profile.get('top_brand_category', '')
         
-        prompt = f"""{profile_text}
-
-Определи один финансовый продукт ПСБ, который лучше всего подходит этому пользователю.
-Доступные продукты: Ипотека, Кредитная карта, Вклад, Кредит, Дебетовая карта.
-
-Ответь только названием продукта, без дополнительных объяснений."""
+        parts = [f"Пл:{num_payments}", f"Чек:${avg_tx:.0f}"]
+        if top_category:
+            cat_short = top_category[:15] if len(top_category) > 15 else top_category
+            parts.append(f"К:{cat_short}")
+        
+        prompt = "|".join(parts) + "|Продукт? (Ипотека/Кредитка/Вклад/Кредит/Дебет)"
         
         try:
             response = call_yandex_gpt(
-                prompt,
-                instructions="Ты эксперт по банковским продуктам. Анализируй профиль пользователя и рекомендуй наиболее подходящий продукт.",
+                input_text=prompt,
+                instructions="Эксперт банковских продуктов. Профиль → продукт. Ответ: только название.",
                 temperature=0.3
             )
             
@@ -335,6 +327,24 @@ class NBOModel:
         unique_items = user_profile.get("unique_items", 0)
         top_category = user_profile.get("top_category")
         top_brand = user_profile.get("top_brand")
+        top_brand_category = user_profile.get("top_brand_category")
+        brand_categories = user_profile.get("brand_categories", [])
+        
+        # Новые метрики из retail и receipts
+        num_retail_events = user_profile.get("num_retail_events", 0)
+        num_retail_orders = user_profile.get("num_retail_orders", 0)
+        action_types = user_profile.get("action_types", {})
+        
+        # Анализ action_type для понимания поведения
+        num_add_to_cart = action_types.get("add_to_cart", 0)
+        num_orders = action_types.get("order", 0) + num_retail_orders
+        num_clicks = action_types.get("click", 0)
+        
+        # Использование embedding для улучшения рекомендаций (если доступен)
+        embedding_diversity = user_profile.get("embedding_diversity", 0.0)
+        # Высокое разнообразие embedding = разнообразные интересы = может нужен кредит для разных покупок
+        if embedding_diversity > 0.1:
+            loan_score += 0.15 * min(embedding_diversity, 1.0)
         
         # Улучшенный анализ графа (если доступен)
         graph_scores = {}
@@ -543,53 +553,200 @@ class NBOModel:
                 pattern_scores["Ипотека"] = pattern_scores.get("Ипотека", 0) + 0.1
                 pattern_scores["Кредит"] = pattern_scores.get("Кредит", 0) + 0.1
         
-        # Базовые оценки на основе профиля
+        # Нормализация признаков для более точных оценок
+        # Используем относительные значения вместо абсолютных порогов
+        
+        # Нормализуем финансовые метрики (0-1 шкала)
+        max_tx_normalized = min(total_tx / 200000.0, 1.0) if total_tx > 0 else 0.0  # Нормализуем до 200k
+        avg_tx_normalized = min(avg_tx / 50000.0, 1.0) if avg_tx > 0 else 0.0  # Нормализуем до 50k
+        payment_frequency = min(num_payments / 20.0, 1.0) if num_payments > 0 else 0.0  # Нормализуем до 20 платежей
+        
+        # Нормализуем активность
+        activity_intensity = min(num_views / 50.0, 1.0) if num_views > 0 else 0.0  # Нормализуем до 50 просмотров
+        diversity_score = min(unique_items / 30.0, 1.0) if unique_items > 0 else 0.0  # Нормализуем до 30 товаров
+        engagement_duration = min(days_active / 14.0, 1.0) if days_active > 0 else 0.0  # Нормализуем до 14 дней
+        
+        # Композитные индексы (комбинации признаков)
+        high_value_customer = (max_tx_normalized * 0.5 + avg_tx_normalized * 0.3 + payment_frequency * 0.2)
+        research_behavior = (activity_intensity * 0.4 + diversity_score * 0.4 + engagement_duration * 0.2)
+        active_spender = (payment_frequency * 0.5 + avg_tx_normalized * 0.3 + engagement_duration * 0.2)
+        
+        # Базовые оценки на основе профиля с улучшенными правилами
         base_scores = {}
         
-        # Ипотека - если есть активность, платежи и просмотры недвижимости/ремонта
+        # Ипотека - улучшенная логика на основе комбинаций признаков
         mortgage_score = 0.0
-        if total_tx > 50000:  # Крупные платежи
-            mortgage_score += 0.3
-        if num_views > 10 and unique_items > 5:  # Активный просмотр
-            mortgage_score += 0.25
-        if days_active > 7:  # Долгая активность
-            mortgage_score += 0.2
-        if top_category and ("недвижимость" in str(top_category).lower() or "ремонт" in str(top_category).lower()):
-            mortgage_score += 0.25
-        base_scores["Ипотека"] = mortgage_score if mortgage_score > 0 else 0.1
         
-        # Кредитная карта - если есть регулярные платежи
+        # Сильные сигналы для ипотеки
+        # 1. Комбинация: крупные платежи + активное исследование
+        if high_value_customer > 0.4 and research_behavior > 0.5:
+            mortgage_score += 0.35
+        
+        # 1.1. Retail заказы в категориях недвижимости/ремонта
+        if num_retail_orders > 0 and top_category:
+            cat_lower = str(top_category).lower()
+            if any(kw in cat_lower for kw in ["недвижимость", "ремонт", "строительство", "мебель"]):
+                mortgage_score += 0.25
+        
+        # 2. Категории недвижимости/ремонта (сильный сигнал)
+        real_estate_signal = 0.0
+        if top_category:
+            cat_lower = str(top_category).lower()
+            if any(kw in cat_lower for kw in ["недвижимость", "ремонт", "дом", "квартира", "строительство"]):
+                real_estate_signal += 0.3
+        
+        if top_brand_category:
+            brand_cat_lower = str(top_brand_category).lower()
+            if any(kw in brand_cat_lower for kw in ["недвижимость", "ремонт", "строительство", "мебель", "интерьер", "сантехника"]):
+                real_estate_signal += 0.35
+        
+        if brand_categories:
+            real_estate_count = sum(1 for cat in brand_categories 
+                                   if any(kw in str(cat).lower() for kw in ["недвижимость", "ремонт", "строительство"]))
+            if real_estate_count > 0:
+                real_estate_signal += 0.2 * min(real_estate_count / 3.0, 1.0)
+        
+        mortgage_score += min(real_estate_signal, 0.4)  # Ограничиваем вклад категорий
+        
+        # 3. Долгосрочная активность + разнообразие = планирование крупной покупки
+        if engagement_duration > 0.5 and diversity_score > 0.4:
+            mortgage_score += 0.25
+        
+        # 4. Крупные платежи указывают на способность к крупным покупкам
+        if max_tx_normalized > 0.3:
+            mortgage_score += 0.2 * max_tx_normalized
+        
+        # 5. Много просмотров разных товаров = исследование вариантов
+        if activity_intensity > 0.6 and diversity_score > 0.5:
+            mortgage_score += 0.15
+        
+        base_scores["Ипотека"] = min(mortgage_score, 1.0) if mortgage_score > 0 else 0.05
+        
+        # Кредитная карта - улучшенная логика для активных покупателей
         card_score = 0.0
-        if num_payments > 5:  # Регулярные платежи
-            card_score += 0.4
-        if avg_tx > 1000 and avg_tx < 50000:  # Средние платежи
-            card_score += 0.3
-        if days_active > 3:  # Активность
+        
+        # Сильные сигналы для кредитной карты
+        # 1. Регулярные платежи среднего размера (основной паттерн)
+        if payment_frequency > 0.3 and 0.02 < avg_tx_normalized < 0.8:  # Средние платежи
+            card_score += 0.4 * payment_frequency
+        
+        # 2. Активный спендер (много платежей, регулярная активность)
+        if active_spender > 0.5:
+            card_score += 0.35
+        
+        # 2.1. Retail активность (добавления в корзину, заказы) указывает на активного покупателя
+        if num_add_to_cart > 0 or num_orders > 0:
+            card_score += 0.2 * min((num_add_to_cart + num_orders) / 5.0, 1.0)
+        
+        # 3. Категории брендов: розничная торговля, услуги, развлечения
+        retail_signal = 0.0
+        retail_keywords = ["розничная", "торговля", "супермаркет", "магазин", "гипермаркет", 
+                          "услуги", "развлечения", "ресторан", "кафе", "доставка", "еда"]
+        
+        if top_brand_category:
+            brand_cat_lower = str(top_brand_category).lower()
+            if any(kw in brand_cat_lower for kw in retail_keywords):
+                retail_signal += 0.3
+        
+        if brand_categories:
+            retail_count = sum(1 for cat in brand_categories 
+                              if any(kw in str(cat).lower() for kw in retail_keywords))
+            if retail_count > 0:
+                retail_signal += 0.2 * min(retail_count / 2.0, 1.0)
+        
+        card_score += min(retail_signal, 0.3)
+        
+        # 4. Регулярная активность (ежедневные/еженедельные платежи)
+        if engagement_duration > 0.3 and payment_frequency > 0.25:
             card_score += 0.2
-        base_scores["Кредитная карта"] = card_score if card_score > 0 else 0.2
         
-        # Вклад - если есть крупные платежи
+        # 5. Базовая рекомендация для активных пользователей
+        if num_payments > 0 or num_views > 0:
+            card_score += 0.15
+        
+        base_scores["Кредитная карта"] = min(card_score, 1.0) if card_score > 0 else 0.15
+        
+        # Вклад - улучшенная логика для накопителей
         deposit_score = 0.0
-        if total_tx > 100000:  # Крупные суммы
-            deposit_score += 0.5
-        if num_payments > 10:  # Много транзакций
-            deposit_score += 0.2
-        if avg_tx > 10000:  # Крупные средние платежи
-            deposit_score += 0.2
-        base_scores["Вклад"] = deposit_score if deposit_score > 0 else 0.15
         
-        # Кредит - если есть активность и просмотры
+        # Сильные сигналы для вклада
+        # 1. Крупные суммы (основной индикатор)
+        if max_tx_normalized > 0.5:  # Более 100k
+            deposit_score += 0.4 * max_tx_normalized
+        
+        # 2. Высокий средний чек + много транзакций = накопления
+        if avg_tx_normalized > 0.2 and payment_frequency > 0.4:
+            deposit_score += 0.35
+        
+        # 3. Категории брендов: финансовые услуги, инвестиции
+        finance_signal = 0.0
+        finance_keywords = ["финансы", "инвестиции", "банк", "страхование", "брокер", 
+                           "управление активами", "пенсионный", "накопительный"]
+        
+        if top_brand_category:
+            brand_cat_lower = str(top_brand_category).lower()
+            if any(kw in brand_cat_lower for kw in finance_keywords):
+                finance_signal += 0.35
+        
+        if brand_categories:
+            finance_count = sum(1 for cat in brand_categories 
+                              if any(kw in str(cat).lower() for kw in finance_keywords))
+            if finance_count > 0:
+                finance_signal += 0.25 * min(finance_count / 2.0, 1.0)
+        
+        deposit_score += min(finance_signal, 0.35)
+        
+        # 4. Стабильные крупные платежи (регулярные накопления)
+        if avg_tx_normalized > 0.15 and payment_frequency > 0.3 and engagement_duration > 0.4:
+            deposit_score += 0.2
+        
+        # 5. Высокий общий объем транзакций
+        if high_value_customer > 0.6:
+            deposit_score += 0.15
+        
+        base_scores["Вклад"] = min(deposit_score, 1.0) if deposit_score > 0 else 0.1
+        
+        # Кредит - улучшенная логика для исследователей крупных покупок
         loan_score = 0.0
-        if num_views > 15:  # Много просмотров
-            loan_score += 0.4
-        if unique_items > 10:  # Разнообразие интересов
-            loan_score += 0.3
-        if days_active > 5:  # Долгая активность
-            loan_score += 0.2
-        base_scores["Кредит"] = loan_score if loan_score > 0 else 0.1
         
-        # Дебетовая карта - базовая рекомендация
-        base_scores["Дебетовая карта"] = 0.25 if (num_payments > 0 or num_views > 0) else 0.3
+        # Сильные сигналы для кредита
+        # 1. Активное исследование (много просмотров, разнообразие)
+        if research_behavior > 0.6:
+            loan_score += 0.4
+        
+        # 2. Долгосрочная активность + разнообразие = планирование покупки
+        if engagement_duration > 0.4 and diversity_score > 0.5:
+            loan_score += 0.35
+        
+        # 3. Средние суммы + активное исследование = кредит на покупку
+        if 0.1 < avg_tx_normalized < 0.5 and activity_intensity > 0.5:
+            loan_score += 0.3
+        
+        # 4. Много разных категорий товаров = разнообразные интересы
+        if diversity_score > 0.6:
+            loan_score += 0.2
+        
+        # 5. Категории: техника, авто, крупная бытовая техника
+        if top_category:
+            cat_lower = str(top_category).lower()
+            if any(kw in cat_lower for kw in ["техника", "авто", "электроника", "бытовая техника", "мебель"]):
+                loan_score += 0.25
+        
+        base_scores["Кредит"] = min(loan_score, 1.0) if loan_score > 0 else 0.08
+        
+        # Дебетовая карта - базовая рекомендация для всех активных пользователей
+        # Используем обратную логику: если нет сильных сигналов для других продуктов
+        debit_score = 0.3  # Базовая рекомендация
+        
+        # Увеличиваем для новых/малоактивных пользователей
+        if num_payments == 0 and num_views < 5:
+            debit_score = 0.5  # Новый пользователь
+        elif num_payments > 0 and payment_frequency < 0.2:
+            debit_score = 0.4  # Малоактивный пользователь
+        elif active_spender < 0.3:
+            debit_score = 0.35  # Не очень активный спендер
+        
+        base_scores["Дебетовая карта"] = debit_score
         
         # Улучшенное объединение оценок с адаптивными весами
         final_scores = {}

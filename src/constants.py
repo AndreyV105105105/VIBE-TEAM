@@ -32,9 +32,9 @@ DEFAULT_MIN_PATTERN_LEN = 3
 DEFAULT_MIN_SUPPORT = 2
 DEFAULT_TOP_K = 3
 
-# YandexGPT параметры
+# YandexGPT параметры (оптимизированы для экономии токенов)
 YANDEXGPT_TEMPERATURE = 0.3
-YANDEXGPT_MAX_TOKENS = 200
+YANDEXGPT_MAX_TOKENS = 150  # Уменьшено с 200 до 150 для экономии
 
 # Пути к файлам
 MODELS_DIR = "models"

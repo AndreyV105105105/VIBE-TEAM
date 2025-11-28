@@ -2,16 +2,19 @@
 Модуль для создания профилей пользователей.
 
 Формирует профили на основе агрегированных данных и паттернов поведения.
+Использует embedding товаров для улучшения профиля (опционально).
 """
 
 from typing import Dict, List, Optional
 import polars as pl
+import numpy as np
 
 
 def create_user_profile(
     user_events: Dict[str, pl.DataFrame],
     patterns: Optional[List] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    items_with_embeddings: Optional[Dict[str, pl.DataFrame]] = None
 ) -> Dict:
     """
     Создает профиль пользователя на основе событий и паттернов.
@@ -26,33 +29,79 @@ def create_user_profile(
     if user_id:
         profile["user_id"] = user_id
     
-    # Статистики по маркетплейсу
+    # Статистики по маркетплейсу (используем category из items если доступна)
     mp_df = user_events.get("marketplace", pl.DataFrame())
+    retail_df = user_events.get("retail", pl.DataFrame())
+    
+    # Объединяем marketplace и retail для общей статистики просмотров
+    all_views = []
     if mp_df.height > 0:
-        profile["num_views"] = mp_df.height
-        profile["unique_items"] = mp_df["item_id"].n_unique() if "item_id" in mp_df.columns else 0
+        all_views.append(mp_df)
+    if retail_df.height > 0:
+        all_views.append(retail_df)
+    
+    if all_views:
+        combined_views = pl.concat(all_views)
+        profile["num_views"] = combined_views.height
+        profile["unique_items"] = combined_views["item_id"].n_unique() if "item_id" in combined_views.columns else 0
         
-        # Топ категория
-        if "category_id" in mp_df.columns:
-            top_category = mp_df["category_id"].mode().to_list()
+        # Топ категория (используем category из items если доступна, иначе category_id)
+        category_col = "category" if "category" in combined_views.columns else "category_id"
+        if category_col in combined_views.columns:
+            top_category = combined_views[category_col].mode().to_list()
             profile["top_category"] = top_category[0] if top_category else None
         else:
             profile["top_category"] = None
         
         # Регион (если есть)
-        if "region" in mp_df.columns:
-            region = mp_df["region"].mode().to_list()
+        if "region" in combined_views.columns:
+            region = combined_views["region"].mode().to_list()
             profile["region"] = region[0] if region else None
         else:
             profile["region"] = None
+        
+        # Статистика по action_type
+        if "action_type" in combined_views.columns:
+            action_counts = combined_views["action_type"].value_counts()
+            profile["action_types"] = dict(zip(action_counts["action_type"].to_list(), action_counts["count"].to_list()))
+        else:
+            profile["action_types"] = {}
     else:
         profile["num_views"] = 0
         profile["unique_items"] = 0
         profile["top_category"] = None
         profile["region"] = None
+        profile["action_types"] = {}
     
-    # Статистики по платежам
+    # Статистики по retail отдельно
+    if retail_df.height > 0:
+        profile["num_retail_events"] = retail_df.height
+        if "action_type" in retail_df.columns:
+            orders = retail_df.filter(pl.col("action_type") == "order")
+            profile["num_retail_orders"] = orders.height
+        else:
+            profile["num_retail_orders"] = 0
+    else:
+        profile["num_retail_events"] = 0
+        profile["num_retail_orders"] = 0
+    
+    # Статистики по платежам (включая receipts)
     pay_df = user_events.get("payments", pl.DataFrame())
+    receipts_df = user_events.get("receipts", pl.DataFrame())
+    
+    # Объединяем payments и receipts для полной статистики
+    all_payments = []
+    if pay_df.height > 0:
+        all_payments.append(pay_df)
+    if receipts_df.height > 0:
+        # Нормализуем receipts: используем price как amount
+        receipts_normalized = receipts_df
+        if "price" in receipts_df.columns and "amount" not in receipts_df.columns:
+            receipts_normalized = receipts_df.with_columns(pl.col("price").alias("amount"))
+        all_payments.append(receipts_normalized)
+    
+    if all_payments:
+        pay_df = pl.concat(all_payments)
     if pay_df.height > 0:
         profile["num_payments"] = pay_df.height
         
@@ -93,7 +142,8 @@ def create_user_profile(
                 print(f"📊 Статистика amount (до обработки): min=${min_val:.2f}, max=${max_val:.2f}, mean=${mean_val:.2f}")
                 print(f"   Абсолютные значения: min=${min_abs:.2f}, max=${max_abs:.2f}, mean=${mean_abs_val:.2f}")
                 if p95 is not None:
-                    print(f"   Перцентили: P95=${p95:.2f}, P99=${p99:.2f if p99 else 0:.2f}")
+                    p99_val = p99 if p99 is not None else 0.0
+                    print(f"   Перцентили: P95=${p95:.2f}, P99=${p99_val:.2f}")
                 print(f"   Примеры значений: {sample_values[:5]}")
                 print(f"   Всего записей: {pay_df.height}")
                 
@@ -154,12 +204,20 @@ def create_user_profile(
             profile["max_tx"] = 0
             profile["min_tx"] = 0
         
-        # Топ бренд
+        # Топ бренд (сохраняем и ID и название, если доступно)
+        # Также собираем категории брендов для анализа
         if "brand_id" in pay_df.columns:
             top_brand = pay_df["brand_id"].mode().to_list()
             profile["top_brand"] = top_brand[0] if top_brand else None
+            profile["top_brand_id"] = top_brand[0] if top_brand else None
+            
+            # Собираем все уникальные бренды пользователя
+            unique_brands = pay_df["brand_id"].unique().to_list()
+            profile["brand_ids"] = unique_brands
         else:
             profile["top_brand"] = None
+            profile["top_brand_id"] = None
+            profile["brand_ids"] = []
     else:
         profile["num_payments"] = 0
         profile["avg_tx"] = 0
@@ -241,6 +299,65 @@ def create_user_profile(
         for pattern in [("V", "P", "V"), ("V", "V", "P"), ("P", "V", "C"), ("V", "P", "P")]:
             pattern_str = "→".join(pattern)
             profile[f"has_pattern_{pattern_str.replace('→', '_')}"] = 0
+    
+    # Использование embedding для улучшения профиля (опционально)
+    # Embedding - это векторное представление товара, которое кодирует его семантические свойства
+    # Можно использовать для:
+    # 1. Поиска похожих товаров (cosine similarity)
+    # 2. Кластеризации интересов пользователя
+    # 3. Улучшения рекомендаций через collaborative filtering
+    if items_with_embeddings:
+        try:
+            # Собираем embedding всех товаров пользователя
+            user_item_ids = set()
+            if user_events.get("marketplace", pl.DataFrame()).height > 0:
+                mp_df = user_events["marketplace"]
+                if "item_id" in mp_df.columns:
+                    user_item_ids.update(mp_df["item_id"].unique().to_list())
+            if user_events.get("retail", pl.DataFrame()).height > 0:
+                retail_df = user_events["retail"]
+                if "item_id" in retail_df.columns:
+                    user_item_ids.update(retail_df["item_id"].unique().to_list())
+            
+            if user_item_ids:
+                # Объединяем embedding из всех каталогов
+                all_embeddings = []
+                for catalog_name, items_df in items_with_embeddings.items():
+                    if items_df.height > 0 and "item_id" in items_df.columns and "embedding" in items_df.columns:
+                        # Фильтруем только товары пользователя
+                        user_items = items_df.filter(pl.col("item_id").is_in(list(user_item_ids)))
+                        if user_items.height > 0:
+                            # Извлекаем embedding
+                            for row in user_items.iter_rows(named=True):
+                                emb = row.get("embedding")
+                                if emb is not None:
+                                    # Embedding может быть списком или numpy массивом
+                                    if isinstance(emb, list):
+                                        all_embeddings.append(np.array(emb))
+                                    elif isinstance(emb, np.ndarray):
+                                        all_embeddings.append(emb)
+                
+                if all_embeddings:
+                    # Вычисляем средний embedding (представление интересов пользователя)
+                    avg_embedding = np.mean(all_embeddings, axis=0)
+                    profile["avg_item_embedding"] = avg_embedding.tolist()  # Сохраняем как список для JSON
+                    profile["embedding_dim"] = len(avg_embedding)
+                    
+                    # Вычисляем дисперсию embedding (разнообразие интересов)
+                    if len(all_embeddings) > 1:
+                        embedding_variance = np.var(all_embeddings, axis=0).mean()
+                        profile["embedding_diversity"] = float(embedding_variance)
+                    else:
+                        profile["embedding_diversity"] = 0.0
+                    
+                    print(f"✅ Использованы embedding для {len(all_embeddings)} товаров (размерность: {len(avg_embedding)})")
+        except Exception as e:
+            print(f"⚠ Ошибка при обработке embedding: {e}")
+            profile["embedding_dim"] = 0
+            profile["embedding_diversity"] = 0.0
+    else:
+        profile["embedding_dim"] = 0
+        profile["embedding_diversity"] = 0.0
     
     return profile
 
