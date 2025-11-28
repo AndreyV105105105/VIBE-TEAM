@@ -15,13 +15,16 @@ joblib>=1.3.0  # Для сохранения моделей
 streamlit>=1.28.0
 pyvis>=0.3.2
 plotly>=5.17.0  # Для дополнительных графиков
+streamlit-option-menu>=0.3.6  # Для улучшенного UI (опционально)
 
 # API для объяснений
 requests>=2.31.0
+openai>=1.0.0  # Для YandexGPT Responses API (OpenAI compatible)
 
 # Утилиты
 python-dotenv>=1.0.0  # Для .env файлов с API ключами
 tqdm>=4.66.0  # Прогресс-бары
+beautifulsoup4>=4.12.0  # Для парсинга HTML (опционально, для обнаружения файлов)
 
 # Для разработки и тестирования
 pytest>=7.4.0

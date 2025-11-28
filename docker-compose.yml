@@ -1,0 +1,30 @@
+services:
+  vibe-team:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: psb-recommendation
+    ports:
+      - "8501:8501"
+    volumes:
+      # Монтируем данные (если есть локальные файлы)
+      - ./data:/app/data:ro
+      # Монтируем модели (для сохранения обученных моделей)
+      - ./models:/app/models
+      # Монтируем кэш (для ускорения повторных запросов)
+      - ./.cache:/app/.cache
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - YANDEX_DISK_PUBLIC_LINK=${YANDEX_DISK_PUBLIC_LINK:-https://disk.yandex.ru/d/H0ZTzS55GSz1Wg}
+      - YANDEX_DISK_TOKEN=${YANDEX_DISK_TOKEN:-y0__xDu39DhAxjR9TsgsK6AtRUwxqr-5geCNXrvPMewIJ4UjCRvWoVs8z_7KQ}
+      - YANDEX_DISK_BASE_PATH=${YANDEX_DISK_BASE_PATH:-Загрузки/Dataset_case_1}
+      - PREFER_CACHE=${PREFER_CACHE:-false}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
