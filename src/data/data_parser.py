@@ -29,7 +29,8 @@ def normalize_marketplace_events(df: pl.DataFrame, file_path: str = "") -> pl.Da
     if df.height == 0:
         return df
     
-    result = df.clone()
+    # Оптимизация: избегаем клонирования
+    result = df
     
     # Добавляем domain если его нет
     if "domain" not in result.columns:
@@ -126,7 +127,7 @@ def normalize_payments_events(df: pl.DataFrame, file_path: str = "") -> pl.DataF
     Ожидаемые колонки после нормализации:
     - user_id: ID пользователя
     - brand_id: ID бренда
-    - amount: Сумма платежа
+    - amount: Сумма платежа (в долларах)
     - timestamp: Временная метка
     - domain: "payments"
     
@@ -136,6 +137,11 @@ def normalize_payments_events(df: pl.DataFrame, file_path: str = "") -> pl.DataF
     """
     if df.height == 0:
         return df
+    
+    # Диагностика: показываем исходные колонки
+    print(f"📋 Парсинг payments events из {file_path}:")
+    print(f"   Исходные колонки: {df.columns}")
+    print(f"   Количество строк: {df.height}")
     
     result = df.clone()
     
@@ -178,6 +184,30 @@ def normalize_payments_events(df: pl.DataFrame, file_path: str = "") -> pl.DataF
             # Если нет amount, создаем 0
             result = result.with_columns(pl.lit(0.0).alias("amount"))
     
+    # Проверяем тип amount и приводим к числовому формату (значения уже в долларах, не конвертируем)
+    if "amount" in result.columns and result.height > 0:
+        try:
+            # Проверяем тип и конвертируем в числовой
+            if result["amount"].dtype not in [pl.Float64, pl.Float32, pl.Int64, pl.Int32]:
+                result = result.with_columns(pl.col("amount").cast(pl.Float64, strict=False))
+            
+            # Диагностика: показываем статистику (значения уже в долларах)
+            non_zero = result.filter(pl.col("amount").abs() > 0.001)
+            if non_zero.height > 0:
+                amount_stats = non_zero.select([
+                    pl.col("amount").abs().min().alias("min_abs"),
+                    pl.col("amount").abs().max().alias("max_abs"),
+                    pl.col("amount").abs().mean().alias("mean_abs"),
+                    pl.col("amount").abs().quantile(0.5).alias("median_abs")
+                ])
+                
+                if amount_stats.height > 0:
+                    stats = amount_stats.row(0)
+                    min_abs, max_abs, mean_abs, median_abs = stats
+                    print(f"💵 Значения amount (в долларах): min=${min_abs:.2f}, max=${max_abs:.2f}, mean=${mean_abs:.2f}, median=${median_abs:.2f}")
+        except Exception as e:
+            print(f"⚠ Не удалось обработать amount: {e}")
+    
     # Нормализуем timestamp
     if "timestamp" not in result.columns:
         for alt_name in ["time", "Time", "ts", "date", "datetime", "event_time", "eventTime"]:
@@ -205,6 +235,15 @@ def normalize_payments_events(df: pl.DataFrame, file_path: str = "") -> pl.DataF
     expected_cols = ["user_id", "brand_id", "amount", "timestamp", "domain"]
     available_cols = [col for col in expected_cols if col in result.columns]
     
+    # Финальная диагностика
+    if result.height > 0:
+        print(f"   ✅ После нормализации: колонки {available_cols}, строк: {result.height}")
+        if "amount" in available_cols:
+            amount_sample = result.select(pl.col("amount")).head(5).to_series().to_list()
+            print(f"   💵 Примеры значений amount: {amount_sample}")
+    else:
+        print(f"   ⚠ После нормализации DataFrame пуст")
+    
     return result.select(available_cols)
 
 
@@ -219,7 +258,8 @@ def normalize_retail_events(df: pl.DataFrame, file_path: str = "") -> pl.DataFra
     if df.height == 0:
         return df
     
-    result = df.clone()
+    # Оптимизация: избегаем клонирования
+    result = df
     
     # Добавляем domain если его нет
     if "domain" not in result.columns:

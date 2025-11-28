@@ -537,7 +537,9 @@ class YandexDiskLoader:
                     print(f"⚠ Ошибка при загрузке {file_info['name']} из кэша: {e}")
                 return None
             
-            with ThreadPoolExecutor(max_workers=min(4, len(events_files))) as executor:
+            # Оптимизация: увеличиваем количество потоков для параллельной загрузки
+            max_workers = min(8, len(events_files), os.cpu_count() or 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(load_cached_file, file_info): file_info for file_info in events_files}
                 for future in as_completed(futures):
                     result = future.result()
@@ -690,7 +692,9 @@ class YandexDiskLoader:
                     print(f"⚠ Ошибка при загрузке {file_info['name']} из кэша: {e}")
                 return None
             
-            with ThreadPoolExecutor(max_workers=min(4, len(events_files))) as executor:
+            # Оптимизация: увеличиваем количество потоков для параллельной загрузки
+            max_workers = min(8, len(events_files), os.cpu_count() or 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(load_cached_file, file_info): file_info for file_info in events_files}
                 for future in as_completed(futures):
                     result = future.result()
@@ -710,11 +714,17 @@ class YandexDiskLoader:
                     if df.height > 0:
                         # Проверяем наличие колонки user_id
                         if "user_id" in df.columns:
+                            # Диагностика: проверяем наличие amount/price
+                            if "amount" in df.columns:
+                                amount_sample = df.select(pl.col("amount")).head(3).to_series().to_list()
+                                print(f"   ✅ Загружено {df.height} строк, amount: {amount_sample}")
+                            elif "price" in df.columns:
+                                print(f"   ⚠ Файл содержит 'price' вместо 'amount'. Колонки: {df.columns}")
                             frames.append(df)
                         else:
-                            print(f"Предупреждение: файл {file_path} не содержит колонку 'user_id'. Колонки: {df.columns}")
+                            print(f"   ⚠ Файл {file_path} не содержит колонку 'user_id'. Колонки: {df.columns}")
                     else:
-                        print(f"Предупреждение: файл {file_path} пустой")
+                        print(f"   ⚠ Файл {file_path} пустой")
                 except Exception as e:
                     print(f"Ошибка при загрузке {file_path}: {e}")
                     continue
