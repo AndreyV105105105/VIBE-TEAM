@@ -46,23 +46,26 @@ def get_yandex_cloud_config(
     """
     Получает конфигурацию Yandex Cloud (folder_id и api_key).
     
-    Использует прямые значения из констант.
+    Читает из переменных окружения (.env файл).
     
     :param env_path: Не используется (оставлен для совместимости)
     :param auto_download: Не используется (оставлен для совместимости)
     :return: Словарь с конфигурацией
+    :raises ValueError: Если ключи не найдены в переменных окружения
     """
+    if not YANDEX_CLOUD_FOLDER_ID or not YANDEX_CLOUD_API_KEY:
+        raise ValueError(
+            "YANDEX_CLOUD_FOLDER_ID и YANDEX_CLOUD_API_KEY должны быть установлены в переменных окружения. "
+            "Создайте .env файл на основе .env.example"
+        )
     return {
         "folder_id": YANDEX_CLOUD_FOLDER_ID,
         "api_key": YANDEX_CLOUD_API_KEY
     }
 
 
-# Глобальный кэш конфигурации
-_cached_config: Dict[str, str] = {
-    "folder_id": YANDEX_CLOUD_FOLDER_ID,
-    "api_key": YANDEX_CLOUD_API_KEY
-}
+# Глобальный кэш конфигурации (инициализируется при первом вызове)
+_cached_config: Optional[Dict[str, str]] = None
 
 
 def get_cached_config(
@@ -72,12 +75,16 @@ def get_cached_config(
     """
     Получает конфигурацию с кэшированием.
     
-    Использует прямые значения из констант.
+    Читает из переменных окружения (.env файл) и кэширует результат.
     
     :param env_path: Не используется (оставлен для совместимости)
     :param auto_download: Не используется (оставлен для совместимости)
     :return: Словарь с конфигурацией
+    :raises ValueError: Если ключи не найдены в переменных окружения
     """
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = get_yandex_cloud_config()
     return _cached_config
 
 
@@ -107,7 +114,13 @@ def exchange_code_for_token(authorization_code: str) -> Optional[str]:
     
     :param authorization_code: Код авторизации, полученный после перехода по OAuth URL
     :return: OAuth токен или None в случае ошибки
+    :raises ValueError: Если YANDEX_DISK_CLIENT_ID или YANDEX_DISK_CLIENT_SECRET не установлены
     """
+    if not YANDEX_DISK_CLIENT_ID or not YANDEX_DISK_CLIENT_SECRET:
+        raise ValueError(
+            "YANDEX_DISK_CLIENT_ID и YANDEX_DISK_CLIENT_SECRET должны быть установлены в переменных окружения. "
+            "Создайте .env файл на основе .env.example"
+        )
     url = "https://oauth.yandex.ru/token"
     
     # Используем Basic Auth с ClientID и ClientSecret
