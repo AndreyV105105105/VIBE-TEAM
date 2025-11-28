@@ -301,17 +301,25 @@ class YandexDiskLoader:
         if use_cache and cache_path.exists():
             try:
                 file_size = cache_path.stat().st_size
-                # Быстрая проверка: только первые байты для кэшированных файлов
+                # Быстрая проверка: только первые и последние байты для кэшированных файлов
                 if file_size >= 8:
-                    # Проверяем только первые 4 байта (быстрее чем читать начало и конец)
                     with open(cache_path, "rb") as f:
                         first_4_bytes = f.read(4)
-                    if first_4_bytes == b"PAR1":
-                        # Файл валиден, сразу читаем (без проверки конца для скорости)
-                        df = pl.read_parquet(cache_path)
-                        return df
+                        f.seek(-4, 2)
+                        last_4_bytes = f.read(4)
+                    
+                    if first_4_bytes == b"PAR1" and last_4_bytes == b"PAR1":
+                        # Файл валиден, читаем
+                        try:
+                            df = pl.read_parquet(cache_path)
+                            return df
+                        except Exception as e:
+                            print(f"⚠ Ошибка при чтении parquet {file_path} (несмотря на PAR1): {e}")
+                            # Файл поврежден, удаляем
+                            cache_path.unlink()
                     else:
-                        # Файл поврежден, удаляем и перезагружаем
+                        # Файл поврежден (неполный), удаляем и перезагружаем
+                        print(f"⚠ Файл {file_path} поврежден (нет PAR1 в начале или конце), удаляем...")
                         cache_path.unlink()
                 else:
                     # Файл слишком маленький

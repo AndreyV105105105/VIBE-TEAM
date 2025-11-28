@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # BuildKit включен по умолчанию в Docker Desktop и новых версиях Docker
+      # Для явного включения: export DOCKER_BUILDKIT=1 перед docker compose build
     container_name: psb-recommendation
     ports:
       - "8501:8501"
@@ -13,6 +15,8 @@ services:
       - ./models:/app/models
       # Монтируем кэш (для ускорения повторных запросов)
       - ./.cache:/app/.cache
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1

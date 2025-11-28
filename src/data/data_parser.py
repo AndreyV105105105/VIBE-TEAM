@@ -72,6 +72,23 @@ def normalize_marketplace_events(df: pl.DataFrame, file_path: str = "") -> pl.Da
             # Если нет category_id, создаем null
             result = result.with_columns(pl.lit(None).alias("category_id"))
     
+    # Нормализуем brand_id
+    if "brand_id" not in result.columns:
+        for alt_name in ["brand", "Brand", "brandId", "brandid", "merchant_id", "merchantId"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "brand_id"})
+                break
+        # Если brand_id нет, не создаем фиктивный - оставляем как есть (может быть null)
+    
+    # Приводим brand_id к строке и удаляем .0 если это float
+    if "brand_id" in result.columns:
+        try:
+            result = result.with_columns(
+                pl.col("brand_id").cast(pl.Utf8).str.replace(r"\.0$", "")
+            )
+        except:
+            pass
+    
     # Нормализуем timestamp
     if "timestamp" not in result.columns:
         for alt_name in ["time", "Time", "ts", "date", "datetime", "event_time", "eventTime"]:
@@ -113,7 +130,7 @@ def normalize_marketplace_events(df: pl.DataFrame, file_path: str = "") -> pl.Da
     
     # Выбираем только нужные колонки
     expected_cols = ["user_id", "item_id", "category_id", "timestamp", "domain"]
-    optional_cols = ["region", "price"]
+    optional_cols = ["region", "price", "brand_id", "action_type", "subdomain", "count", "os"]
     
     available_cols = [col for col in expected_cols + optional_cols if col in result.columns]
     
@@ -173,6 +190,16 @@ def normalize_payments_events(df: pl.DataFrame, file_path: str = "") -> pl.DataF
         else:
             # Если нет brand_id, создаем фиктивный
             result = result.with_columns(pl.lit("unknown").alias("brand_id"))
+    
+    # Приводим brand_id к строке и удаляем .0 если это float
+    if "brand_id" in result.columns:
+        try:
+            # Сначала кастуем к строке, чтобы обработать все типы
+            result = result.with_columns(
+                pl.col("brand_id").cast(pl.Utf8).str.replace(r"\.0$", "")
+            )
+        except:
+            pass
     
     # Нормализуем amount
     if "amount" not in result.columns:
@@ -280,6 +307,65 @@ def normalize_retail_events(df: pl.DataFrame, file_path: str = "") -> pl.DataFra
             # Если есть данные, но нет user_id, создаем фиктивный
             result = result.with_columns(pl.lit("unknown").alias("user_id"))
     
+    # Нормализуем item_id
+    if "item_id" not in result.columns:
+        for alt_name in ["item", "itemId", "itemid", "product_id", "productId", "product"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "item_id"})
+                break
+        # Если item_id нет, не создаем фиктивный - оставляем как есть
+    
+    # Нормализуем brand_id
+    if "brand_id" not in result.columns:
+        for alt_name in ["brand", "Brand", "brandId", "brandid", "merchant_id", "merchantId"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "brand_id"})
+                break
+        # Если brand_id нет, не создаем фиктивный - оставляем как есть (может быть null)
+    
+    # Нормализуем category_id
+    if "category_id" not in result.columns:
+        for alt_name in ["category", "categoryId", "categoryid", "cat_id", "cat"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "category_id"})
+                break
+        # Если category_id нет, не создаем - оставляем как есть
+    
+    # Нормализуем action_type
+    if "action_type" not in result.columns:
+        for alt_name in ["action", "actionType", "actiontype", "type", "event_type", "eventType"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "action_type"})
+                break
+    
+    # Нормализуем subdomain
+    if "subdomain" not in result.columns:
+        for alt_name in ["subdomain", "Subdomain", "context", "Context", "source", "Source"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "subdomain"})
+                break
+    
+    # Нормализуем price
+    if "price" not in result.columns:
+        for alt_name in ["Price", "PRICE", "amount", "Amount", "cost", "Cost"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "price"})
+                break
+    
+    # Нормализуем count
+    if "count" not in result.columns:
+        for alt_name in ["Count", "COUNT", "quantity", "Quantity", "qty", "Qty"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "count"})
+                break
+    
+    # Нормализуем os
+    if "os" not in result.columns:
+        for alt_name in ["OS", "os", "operating_system", "OperatingSystem", "platform", "Platform"]:
+            if alt_name in result.columns:
+                result = result.rename({alt_name: "os"})
+                break
+    
     # Нормализуем timestamp
     if "timestamp" not in result.columns:
         for alt_name in ["time", "Time", "ts", "date", "datetime", "event_time", "eventTime"]:
@@ -303,9 +389,11 @@ def normalize_retail_events(df: pl.DataFrame, file_path: str = "") -> pl.DataFra
             except:
                 pass
     
-    # Минимальный набор колонок
+    # Выбираем нужные колонки (сохраняем все важные поля из retail events)
     expected_cols = ["user_id", "timestamp", "domain"]
-    available_cols = [col for col in expected_cols if col in result.columns]
+    optional_cols = ["item_id", "brand_id", "category_id", "action_type", "subdomain", "price", "count", "os"]
+    
+    available_cols = [col for col in expected_cols + optional_cols if col in result.columns]
     
     return result.select(available_cols)
 

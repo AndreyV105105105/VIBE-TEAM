@@ -14,7 +14,8 @@ def create_user_profile(
     user_events: Dict[str, pl.DataFrame],
     patterns: Optional[List] = None,
     user_id: Optional[str] = None,
-    items_with_embeddings: Optional[Dict[str, pl.DataFrame]] = None
+    items_with_embeddings: Optional[Dict[str, pl.DataFrame]] = None,
+    item_to_brand_map: Optional[Dict[str, str]] = None
 ) -> Dict:
     """
     Создает профиль пользователя на основе событий и паттернов.
@@ -22,6 +23,8 @@ def create_user_profile(
     :param user_events: Словарь с событиями по доменам
     :param patterns: Список паттернов поведения
     :param user_id: ID пользователя
+    :param items_with_embeddings: Каталоги товаров с эмбеддингами (опционально)
+    :param item_to_brand_map: Маппинг item_id -> brand_id для восстановления пропусков
     :return: Словарь с профилем пользователя
     """
     profile = {}
@@ -90,18 +93,140 @@ def create_user_profile(
     receipts_df = user_events.get("receipts", pl.DataFrame())
     
     # Объединяем payments и receipts для полной статистики
+    # Приводим к единой схеме: выбираем только общие колонки
     all_payments = []
+    
+    # Определяем общие колонки для объединения
+    common_cols = ["user_id", "amount", "timestamp", "domain"]
+    optional_cols = ["brand_id"]  # Опциональные колонки
+    
     if pay_df.height > 0:
-        all_payments.append(pay_df)
+        # Выбираем только нужные колонки из pay_df
+        pay_cols = [col for col in common_cols + optional_cols if col in pay_df.columns]
+        if pay_cols:
+            all_payments.append(pay_df.select(pay_cols))
+    
     if receipts_df.height > 0:
         # Нормализуем receipts: используем price как amount
         receipts_normalized = receipts_df
         if "price" in receipts_df.columns and "amount" not in receipts_df.columns:
             receipts_normalized = receipts_df.with_columns(pl.col("price").alias("amount"))
-        all_payments.append(receipts_normalized)
+        
+        # Выбираем только нужные колонки из receipts_normalized
+        receipts_cols = [col for col in common_cols + optional_cols if col in receipts_normalized.columns]
+        if receipts_cols:
+            all_payments.append(receipts_normalized.select(receipts_cols))
     
     if all_payments:
-        pay_df = pl.concat(all_payments)
+        # Определяем общий набор колонок
+        all_cols = set()
+        for df in all_payments:
+            all_cols.update(df.columns)
+        all_cols = list(all_cols)
+        
+        # Определяем целевые типы для каждой колонки (приводим к единому формату)
+        # Сначала проверяем, есть ли timestamp с типом Duration
+        has_duration_timestamp = False
+        for df in all_payments:
+            if "timestamp" in df.columns and df["timestamp"].dtype == pl.Duration:
+                has_duration_timestamp = True
+                break
+        
+        target_types = {}
+        for col in all_cols:
+            if col in ["user_id", "brand_id", "domain"]:
+                target_types[col] = pl.Utf8  # Все ID приводим к строке
+            elif col == "amount":
+                target_types[col] = pl.Float64
+            elif col == "timestamp":
+                # Если есть Duration timestamp, не приводим к единому типу (оставляем как есть)
+                # При объединении используем how="diagonal" для поддержки разных типов
+                if has_duration_timestamp:
+                    target_types[col] = None  # Не приводим к единому типу
+                else:
+                    target_types[col] = pl.Datetime
+            else:
+                target_types[col] = pl.Utf8  # По умолчанию строка
+        
+        # Приводим все DataFrame к единой схеме
+        unified_payments = []
+        for df in all_payments:
+            cast_exprs = []
+            
+            # Обрабатываем все колонки (существующие и отсутствующие)
+            for col in all_cols:
+                if col in df.columns:
+                    # Колонка существует - приводим к целевому типу
+                    current_type = df[col].dtype
+                    target_type = target_types[col]
+                    # Специальная обработка для timestamp с Duration
+                    if col == "timestamp" and target_type is None:
+                        # Не приводим timestamp к единому типу - оставляем как есть
+                        cast_exprs.append(pl.col(col))
+                    elif current_type != target_type:
+                        # Специальная обработка для timestamp
+                        if col == "timestamp":
+                            if current_type == pl.Duration:
+                                # Duration нельзя привести к другому типу напрямую
+                                # Оставляем Duration как есть - при объединении используем how="diagonal"
+                                cast_exprs.append(pl.col(col))
+                            elif target_type == pl.Utf8 and current_type == pl.Datetime:
+                                # Datetime -> строка
+                                cast_exprs.append(pl.col(col).cast(pl.Utf8, strict=False).alias(col))
+                            else:
+                                # Обычное приведение для timestamp
+                                cast_exprs.append(pl.col(col).cast(target_type, strict=False).alias(col))
+                        elif col == "brand_id" and target_type == pl.Utf8:
+                            # Специальная обработка для brand_id: убираем .0
+                            cast_exprs.append(
+                                pl.col(col).cast(pl.Utf8, strict=False).str.replace(r"\.0$", "").alias(col)
+                            )
+                        else:
+                            # Для остальных колонок - обычное приведение типов
+                            cast_exprs.append(pl.col(col).cast(target_type, strict=False).alias(col))
+                    else:
+                        # Типы совпадают, но для brand_id все равно проверим нормализацию
+                        if col == "brand_id" and current_type == pl.Utf8:
+                             cast_exprs.append(
+                                pl.col(col).str.replace(r"\.0$", "").alias(col)
+                            )
+                        else:
+                            cast_exprs.append(pl.col(col))
+                else:
+                    # Колонка отсутствует - добавляем с null значением нужного типа
+                    cast_exprs.append(pl.lit(None).cast(target_types[col]).alias(col))
+            
+            # Применяем все преобразования
+            if cast_exprs:
+                df = df.with_columns(cast_exprs)
+            
+            # Если передан item_to_brand_map и есть item_id, пробуем восстановить brand_id
+            if item_to_brand_map and "item_id" in df.columns and "brand_id" in df.columns:
+                try:
+                    # Используем map_dict (replace) для заполнения
+                    # Если brand_id null или empty или unknown, пробуем взять из item_id
+                    df = df.with_columns(
+                        pl.when(
+                            pl.col("brand_id").is_null() | (pl.col("brand_id") == "") | (pl.col("brand_id") == "unknown")
+                        ).then(
+                            pl.col("item_id").cast(pl.Utf8).replace(item_to_brand_map, default=pl.col("brand_id"))
+                        ).otherwise(
+                            pl.col("brand_id")
+                        ).alias("brand_id")
+                    )
+                except Exception as e:
+                    print(f"⚠ Ошибка при восстановлении brand_id из item_id: {e}")
+
+            # Выбираем колонки в правильном порядке
+            unified_payments.append(df.select(all_cols))
+        
+        # Объединяем DataFrames
+        # Если есть Duration timestamp, используем how="diagonal" для гибкого объединения
+        if has_duration_timestamp:
+            # Используем diagonal для объединения с разными типами
+            pay_df = pl.concat(unified_payments, how="diagonal")
+        else:
+            pay_df = pl.concat(unified_payments)
     if pay_df.height > 0:
         profile["num_payments"] = pay_df.height
         
@@ -207,13 +332,26 @@ def create_user_profile(
         # Топ бренд (сохраняем и ID и название, если доступно)
         # Также собираем категории брендов для анализа
         if "brand_id" in pay_df.columns:
-            top_brand = pay_df["brand_id"].mode().to_list()
-            profile["top_brand"] = top_brand[0] if top_brand else None
-            profile["top_brand_id"] = top_brand[0] if top_brand else None
+            # Фильтруем невалидные бренды для поиска моды
+            valid_brands = pay_df.filter(
+                pl.col("brand_id").is_not_null() & 
+                (pl.col("brand_id") != "unknown") & 
+                (pl.col("brand_id") != "")
+            )
             
-            # Собираем все уникальные бренды пользователя
+            if valid_brands.height > 0:
+                top_brand = valid_brands["brand_id"].mode().to_list()
+                profile["top_brand"] = top_brand[0] if top_brand else None
+                profile["top_brand_id"] = top_brand[0] if top_brand else None
+                print(f"✅ Определен топ бренд: {profile['top_brand']}")
+            else:
+                profile["top_brand"] = None
+                profile["top_brand_id"] = None
+                print(f"⚠ Не удалось определить топ бренд (нет валидных данных)")
+            
+            # Собираем все уникальные бренды пользователя (даже unknown, для статистики)
             unique_brands = pay_df["brand_id"].unique().to_list()
-            profile["brand_ids"] = unique_brands
+            profile["brand_ids"] = [b for b in unique_brands if b and b != "unknown"]
         else:
             profile["top_brand"] = None
             profile["top_brand_id"] = None

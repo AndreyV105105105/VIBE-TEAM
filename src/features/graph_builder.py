@@ -35,37 +35,49 @@ def build_behavior_graph(
     # Собираем все события с реальными временными метками и категориями
     events = []
     
+    # Веса действий (чем важнее действие, тем больше вес)
+    ACTION_WEIGHTS = {
+        "view": 1.0,
+        "click": 2.0,
+        "add_to_cart": 3.0,
+        "order": 5.0,
+        "purchase": 5.0,
+        "transaction": 4.0
+    }
+    
     # События маркетплейса - используем категории из items если доступны
     if mp_df.height > 0:
         # Используем category из items если есть, иначе category_id
         category_col = "category" if "category" in mp_df.columns else "category_id"
         subcategory_col = "subcategory" if "subcategory" in mp_df.columns else None
+        has_brand_id = "brand_id" in mp_df.columns
         
         # Группируем по категориям и action_type
+        agg_exprs = [
+            pl.count().alias("count"),
+            pl.col("timestamp").max().alias("last_timestamp"), # Используем последнее событие для актуальности
+            pl.col("item_id").first().alias("top_item")
+        ]
+        if has_brand_id:
+            agg_exprs.append(pl.col("brand_id").first().alias("brand_id"))
+        
         if "action_type" in mp_df.columns:
-            category_agg = mp_df.group_by([category_col, "action_type"]).agg([
-                pl.count().alias("count"),
-                pl.col("timestamp").min().alias("first_timestamp"),
-                pl.col("item_id").first().alias("top_item"),
-                pl.col("brand_id").first().alias("brand_id")
-            ]).sort("count", descending=True).head(30)
+            category_agg = mp_df.group_by([category_col, "action_type"]).agg(agg_exprs).sort("count", descending=True).head(30)
         else:
-            category_agg = mp_df.group_by(category_col).agg([
-                pl.count().alias("count"),
-                pl.col("timestamp").min().alias("first_timestamp"),
-                pl.col("item_id").first().alias("top_item"),
-                pl.col("brand_id").first().alias("brand_id")
-            ]).sort("count", descending=True).head(30)
+            category_agg = mp_df.group_by(category_col).agg(agg_exprs).sort("count", descending=True).head(30)
         
         for row in category_agg.iter_rows(named=True):
             category = row.get(category_col) or row.get("category_id") or "unknown"
             action_type = row.get("action_type", "view")
             count = row.get("count", 1)
-            timestamp = row.get("first_timestamp")
+            timestamp = row.get("last_timestamp")
             if isinstance(timestamp, datetime):
                 event_time = timestamp
             else:
                 event_time = datetime.now()
+            
+            # Вычисляем базовый вес
+            base_weight = ACTION_WEIGHTS.get(action_type, 1.0)
             
             events.append({
                 "timestamp": event_time,
@@ -74,36 +86,38 @@ def build_behavior_graph(
                 "category": str(category),
                 "brand_id": row.get("brand_id"),
                 "domain": "marketplace",
-                "weight": count
+                "weight": count * base_weight  # Учитываем важность действия
             })
     
     # События ритейла - используем категории из items
     if retail_df is not None and retail_df.height > 0:
         category_col = "category" if "category" in retail_df.columns else "category_id"
+        has_brand_id = "brand_id" in retail_df.columns
+        
+        agg_exprs = [
+            pl.count().alias("count"),
+            pl.col("timestamp").max().alias("last_timestamp"),
+            pl.col("item_id").first().alias("top_item")
+        ]
+        if has_brand_id:
+            agg_exprs.append(pl.col("brand_id").first().alias("brand_id"))
+        
         if "action_type" in retail_df.columns:
-            retail_agg = retail_df.group_by([category_col, "action_type"]).agg([
-                pl.count().alias("count"),
-                pl.col("timestamp").min().alias("first_timestamp"),
-                pl.col("item_id").first().alias("top_item"),
-                pl.col("brand_id").first().alias("brand_id")
-            ]).sort("count", descending=True).head(20)
+            retail_agg = retail_df.group_by([category_col, "action_type"]).agg(agg_exprs).sort("count", descending=True).head(20)
         else:
-            retail_agg = retail_df.group_by(category_col).agg([
-                pl.count().alias("count"),
-                pl.col("timestamp").min().alias("first_timestamp"),
-                pl.col("item_id").first().alias("top_item"),
-                pl.col("brand_id").first().alias("brand_id")
-            ]).sort("count", descending=True).head(20)
+            retail_agg = retail_df.group_by(category_col).agg(agg_exprs).sort("count", descending=True).head(20)
         
         for row in retail_agg.iter_rows(named=True):
             category = row.get(category_col) or "unknown"
             action_type = row.get("action_type", "view")
             count = row.get("count", 1)
-            timestamp = row.get("first_timestamp")
+            timestamp = row.get("last_timestamp")
             if isinstance(timestamp, datetime):
                 event_time = timestamp
             else:
                 event_time = datetime.now()
+            
+            base_weight = ACTION_WEIGHTS.get(action_type, 1.0)
             
             events.append({
                 "timestamp": event_time,
@@ -112,26 +126,32 @@ def build_behavior_graph(
                 "category": str(category),
                 "brand_id": row.get("brand_id"),
                 "domain": "retail",
-                "weight": count
+                "weight": count * base_weight
             })
     
     # События платежей - группируем по брендам
-    if pay_df.height > 0:
+    if pay_df.height > 0 and "brand_id" in pay_df.columns:
         brand_totals = pay_df.group_by("brand_id").agg([
             pl.sum("amount").alias("total_amount"),
             pl.count().alias("count"),
-            pl.col("timestamp").min().alias("first_timestamp")
+            pl.col("timestamp").max().alias("last_timestamp")
         ]).sort("total_amount", descending=True).head(20)
         
         for row in brand_totals.iter_rows(named=True):
             brand_id = row.get("brand_id", "unknown")
             total_amount = row.get("total_amount", 0)
             count = row.get("count", 1)
-            timestamp = row.get("first_timestamp")
+            timestamp = row.get("last_timestamp")
             if isinstance(timestamp, datetime):
                 event_time = timestamp
             else:
                 event_time = datetime.now()
+            
+            # Для платежей вес зависит от суммы и количества
+            # Нормализуем сумму (log scale) чтобы большие покупки не перевешивали всё
+            import math
+            amount_factor = math.log1p(max(0, total_amount)) if total_amount > 0 else 1.0
+            base_weight = ACTION_WEIGHTS.get("transaction", 4.0)
             
             events.append({
                 "timestamp": event_time,
@@ -139,13 +159,18 @@ def build_behavior_graph(
                 "brand_id": brand_id,
                 "amount": total_amount,
                 "domain": "payments",
-                "weight": count
+                "weight": count * base_weight * amount_factor
             })
+    elif pay_df.height > 0:
+        # Если нет brand_id, группируем по другим признакам или пропускаем
+        pass
     
     # Чеки (receipts) - детализация покупок с категориями товаров
     if receipts_df is not None and receipts_df.height > 0:
         category_col = "category" if "category" in receipts_df.columns else None
-        if category_col:
+        has_brand_id = "brand_id" in receipts_df.columns
+        
+        if category_col and has_brand_id:
             receipt_agg = receipts_df.group_by([category_col, "brand_id"]).agg([
                 pl.sum("count").alias("total_count"),
                 pl.sum("price").alias("total_price"),

@@ -36,6 +36,8 @@ def process_user(
     """
     # Загрузка данных
     brands_map: Dict[str, str] = {}  # Маппинг brand_id -> brand_name
+    brands_categories_map: Dict[str, str] = {}  # Маппинг brand_id -> category
+    item_to_brand_map: Dict[str, str] = {}  # Маппинг item_id -> brand_id
     
     if use_cloud:
         loader = get_loader()
@@ -46,43 +48,93 @@ def process_user(
         
         # Загружаем справочник брендов для сопоставления brand_id с названиями и категориями
         print(f"📚 Загрузка справочника брендов...")
-        brands_categories_map: Dict[str, str] = {}  # Маппинг brand_id -> category
         
         try:
             brands_df = loader.load_brands()
             if brands_df.height > 0:
                 print(f"✅ Загружено {brands_df.height} брендов")
-                print(f"   Колонки: {brands_df.columns}")
+                print(f"   Колонки в brands.pq: {brands_df.columns}")
+                # Безопасный вывод примера данных
+                try:
+                    sample_row = brands_df.head(1).to_dicts()[0]
+                    # Убираем embedding из вывода, так как он огромный
+                    if "embedding" in sample_row:
+                        sample_row["embedding"] = "[VECTOR]"
+                    print(f"   Пример данных (1 строка): {sample_row}")
+                except:
+                    print("   Не удалось вывести пример данных")
                 
                 # Определяем колонки для маппинга
                 brand_id_col = None
                 brand_name_col = None
                 brand_category_col = None
                 
+                # 1. Ищем ID
                 for col in brands_df.columns:
-                    col_lower = col.lower()
-                    if col_lower in ["brand_id", "brandid", "id"]:
+                    if col.lower() in ["brand_id", "brandid", "id", "merchant_id"]:
                         brand_id_col = col
-                    elif col_lower in ["name", "brand_name", "title", "brand_title", "brand"]:
+                        break
+                
+                # 2. Ищем Название
+                for col in brands_df.columns:
+                    if col.lower() in ["name", "brand_name", "title", "brand_title", "brand", "slug", "caption", "merchant_name"]:
                         brand_name_col = col
-                    elif col_lower in ["category", "category_id", "categoryid", "cat_id", "cat", 
-                                       "merchant_category", "merchant_category_id", "mcc", "mcc_code"]:
+                        break
+                
+                # Если название не найдено, ищем любую строковую колонку (кроме ID и Category)
+                if not brand_name_col:
+                    schema = brands_df.schema
+                    for col_name, dtype in schema.items():
+                        if col_name == brand_id_col: continue
+                        if dtype == pl.Utf8 and col_name.lower() not in ["category", "embedding", "description"]:
+                            print(f"   ℹ Используем колонку '{col_name}' как название бренда (эвристика)")
+                            brand_name_col = col_name
+                            break
+                
+                # 3. Ищем Категорию
+                for col in brands_df.columns:
+                    if col.lower() in ["category", "category_id", "categoryid", "cat_id", "cat", 
+                                       "merchant_category", "merchant_category_id", "mcc", "mcc_code", "industry"]:
                         brand_category_col = col
+                        break
+                
+                print(f"   Найдены колонки: ID='{brand_id_col}', Name='{brand_name_col}', Category='{brand_category_col}'")
                 
                 if brand_id_col:
                     # Создаем маппинг brand_id -> brand_name
-                    if brand_name_col:
-                        for row in brands_df.iter_rows(named=True):
-                            brand_id = str(row.get(brand_id_col, ""))
+                    # Если нет колонки с именем, используем ID как имя
+                    use_id_as_name = False
+                    if not brand_name_col:
+                        print("   ⚠ Колонка с названием бренда не найдена. Будем использовать ID как название.")
+                        use_id_as_name = True
+                        brand_name_col = brand_id_col # Placeholder
+                    
+                    for row in brands_df.iter_rows(named=True):
+                        # Нормализуем ID: удаляем .0 и приводим к строке
+                        brand_id_raw = str(row.get(brand_id_col, ""))
+                        if brand_id_raw.endswith(".0"):
+                            brand_id_raw = brand_id_raw[:-2]
+                        brand_id = brand_id_raw
+                        
+                        if use_id_as_name:
+                            brand_name = f"Brand {brand_id}"
+                        else:
                             brand_name = str(row.get(brand_name_col, ""))
-                            if brand_id and brand_name:
-                                brands_map[brand_id] = brand_name
-                        print(f"✅ Создан маппинг названий для {len(brands_map)} брендов")
+                        
+                        if brand_id and brand_name:
+                            brands_map[brand_id] = brand_name
+                            
+                    print(f"✅ Создан маппинг названий для {len(brands_map)} брендов")
                     
                     # Создаем маппинг brand_id -> category из brands.pq (если есть)
                     if brand_category_col:
                         for row in brands_df.iter_rows(named=True):
-                            brand_id = str(row.get(brand_id_col, ""))
+                            # Нормализуем ID
+                            brand_id_raw = str(row.get(brand_id_col, ""))
+                            if brand_id_raw.endswith(".0"):
+                                brand_id_raw = brand_id_raw[:-2]
+                            brand_id = brand_id_raw
+                            
                             category = str(row.get(brand_category_col, ""))
                             if brand_id and category and category.lower() not in ["none", "null", "nan", ""]:
                                 brands_categories_map[brand_id] = category
@@ -178,6 +230,10 @@ def process_user(
                                     # Создаем маппинг brand_id -> category
                                     for row in brand_categories.iter_rows(named=True):
                                         brand_id = str(row.get("brand_id", ""))
+                                        # Нормализуем ID (удаляем .0)
+                                        if brand_id.endswith(".0"):
+                                            brand_id = brand_id[:-2]
+                                            
                                         top_categories = row.get("top_category", [])
                                         if brand_id and top_categories and len(top_categories) > 0:
                                             # Берем первую (самую частую) категорию
@@ -186,7 +242,7 @@ def process_user(
                                                 brands_categories_map[brand_id] = category
                                     
                                     print(f"✅ Извлечено категорий для {len(brands_categories_map)} брендов из каталогов товаров")
-                                    print(f"   💾 Экономия памяти: загружены только агрегированные данные, не весь каталог (~30 ГБ)")
+                                    print(f"   (Примеры ID: {list(brands_categories_map.keys())[:5]})")
                                 except Exception as e:
                                     print(f"⚠ Ошибка при агрегации категорий брендов: {e}")
                                     import traceback
@@ -655,7 +711,8 @@ def process_user(
         user_events=user_events,
         patterns=patterns,
         user_id=user_id,
-        items_with_embeddings=items_with_embeddings
+        items_with_embeddings=items_with_embeddings,
+        item_to_brand_map=item_to_brand_map
     )
     
     # Добавляем категории брендов в профиль на основе маппинга
@@ -674,6 +731,11 @@ def process_user(
             profile["top_brand_category"] = top_brand_category
             profile["brand_categories"] = list(set(brand_categories))  # Уникальные категории
             print(f"✅ Найдено {len(set(brand_categories))} категорий брендов, топ: {top_brand_category}")
+            
+            # Fallback: Если топ-категория по товарам не определена, используем категорию бренда
+            if not profile.get("top_category") and top_brand_category:
+                profile["top_category"] = top_brand_category
+                print(f"   ℹ Использована категория бренда как топ-категория профиля")
         else:
             profile["top_brand_category"] = None
             profile["brand_categories"] = []
@@ -756,6 +818,43 @@ def process_user(
     all_recommendations.sort(key=lambda x: x["score"], reverse=True)
     final_recommendations = all_recommendations[:top_k]
     
+    print(f"📊 Финальная статистика:")
+    print(f"   - Брендов в маппинге названий: {len(brands_map)}")
+    if len(brands_map) > 0:
+        print(f"     Примеры ключей brands_map: {list(brands_map.keys())[:5]}")
+    
+    print(f"   - Брендов в маппинге категорий: {len(brands_categories_map)}")
+    if len(brands_categories_map) > 0:
+        print(f"     Примеры ключей brands_categories_map: {list(brands_categories_map.keys())[:5]}")
+        
+    if profile.get('top_brand'):
+        top_brand_val = profile['top_brand']
+        print(f"   - Топ бренд в профиле: '{top_brand_val}' (тип: {type(top_brand_val)})")
+        
+        # Пробуем разные варианты поиска ключа
+        keys_to_try = [
+            str(top_brand_val), 
+            str(top_brand_val).replace(".0", ""), 
+            str(int(float(top_brand_val))) if str(top_brand_val).replace(".", "", 1).isdigit() else str(top_brand_val)
+        ]
+        
+        found = False
+        for key in keys_to_try:
+            if brands_map.get(key):
+                print(f"     -> Название найдено по ключу '{key}': {brands_map.get(key)}")
+                # Исправляем в профиле если нашли
+                if key != str(top_brand_val):
+                    print(f"     -> ⚠ Несовпадение форматов! В профиле '{top_brand_val}', в мапе '{key}'")
+                found = True
+                break
+        
+        if not found:
+            print(f"     -> Название НЕ найдено в маппинге. Пробовали ключи: {keys_to_try}")
+    else:
+        print(f"   - Топ бренд в профиле не установлен (None или пустой)")
+        if profile.get('brand_ids'):
+            print(f"     Но есть brand_ids: {profile.get('brand_ids')[:5]}")
+
     return {
         "user_id": user_id,
         "profile": profile,

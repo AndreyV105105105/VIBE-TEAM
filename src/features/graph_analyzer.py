@@ -16,92 +16,87 @@ from src.utils.yandex_gpt_client import call_yandex_gpt
 
 def graph_to_text_description(
     graph: nx.DiGraph, 
-    max_nodes: int = 10,  # Уменьшено с 15 до 10 для экономии токенов
+    max_nodes: int = 15, 
     brands_map: Optional[Dict[str, str]] = None
 ) -> str:
     """
-    Преобразует граф в компактное текстовое описание для анализа YandexGPT.
-    Максимально оптимизировано для экономии токенов.
-    
-    :param graph: Граф поведения
-    :param max_nodes: Максимальное количество узлов для описания (уменьшено до 15)
-    :param brands_map: Маппинг brand_id -> brand_name (опционально)
-    :return: Компактное текстовое описание графа
+    Преобразует граф в текстовое описание для анализа YandexGPT.
+    Оптимизировано для баланса между экономией токенов и понятностью.
     """
     if graph.number_of_nodes() == 0:
-        return "Граф пуст"
+        return "Graph is empty."
     
-    # Берем только топ узлы по степени (самые важные)
+    # Сортируем узлы по важности (степени)
     degrees = dict(graph.degree())
     top_nodes = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:max_nodes]
+    subgraph = graph.subgraph([n[0] for n in top_nodes])
     
-    # Агрегируем узлы по типу и категориям/брендам
-    node_types = {}
-    categories = {}
-    brands = {}
-    total_brand_amount = 0
+    # Группируем узлы по типам для структурированного описания
+    description_parts = []
     
-    for node, data in graph.nodes(data=True):
-        node_type = data.get("type", "unknown")
-        node_types[node_type] = node_types.get(node_type, 0) + 1
-        
-        # Обрабатываем все типы узлов: item, category, brand, brand_category
-        if node_type in ["item", "category"]:
-            category = data.get("category") or data.get("category_id")
-            if category:
-                categories[category] = categories.get(category, 0) + 1
-        elif node_type in ["brand", "brand_category"]:
-            brand_id = data.get("brand_id")
-            amount = abs(data.get("amount", 0))
-            if brand_id:
-                brands[brand_id] = brands.get(brand_id, 0) + amount
-                total_brand_amount += amount
+    # 1. Категории (Categories)
+    categories = []
+    for n, d in subgraph.nodes(data=True):
+        if d.get("type") in ["category", "brand_category"]:
+            cat = d.get("category", str(n))
+            if cat and cat != "unknown":
+                categories.append(cat)
     
-    # Берем только топ связи по весу (еще более агрессивно)
-    edges_with_weights = [(u, v, data.get("weight", 1)) for u, v, data in graph.edges(data=True)]
-    top_edges = sorted(edges_with_weights, key=lambda x: x[2], reverse=True)[:8]  # Только топ 8
-    
-    # Максимально компактное описание (минимум токенов)
-    # Формат: только ключевые данные, без лишних слов
-    
-    parts = []
-    
-    # Типы узлов (сокращенно)
-    if node_types:
-        type_parts = [f"{k[:2]}:{v}" for k, v in sorted(node_types.items(), key=lambda x: x[1], reverse=True)[:3]]
-        parts.append("Т:" + ",".join(type_parts))
-    
-    # Топ категории (только топ 3, сокращенные названия)
     if categories:
-        top_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)[:3]
-        cat_parts = []
-        for cat, count in top_cats:
-            # Сокращаем длинные названия категорий
-            cat_short = cat[:15] if len(cat) > 15 else cat
-            cat_parts.append(f"{cat_short}:{count}")
-        parts.append("К:" + ",".join(cat_parts))
+        unique_cats = sorted(list(set(categories)))[:5]
+        description_parts.append(f"Top Categories: {', '.join(unique_cats)}")
     
-    # Топ бренды (только топ 3, без названий - только ID)
+    # 2. Бренды (Brands)
+    brands = []
+    for n, d in subgraph.nodes(data=True):
+        if d.get("type") in ["brand", "brand_category"]:
+            brand_id = str(d.get("brand_id", ""))
+            # Пытаемся найти имя бренда
+            brand_name = brands_map.get(brand_id) if brands_map else None
+            if not brand_name:
+                brand_name = f"Brand_{brand_id}"
+            
+            amount = d.get("amount", 0)
+            brands.append(f"{brand_name}" + (f"(${amount:.0f})" if amount > 0 else ""))
+    
     if brands:
-        top_brands = sorted(brands.items(), key=lambda x: x[1], reverse=True)[:3]
-        brand_parts = [f"Б{bid}:${amt:.0f}" for bid, amt in top_brands]
-        parts.append("Б:" + ",".join(brand_parts))
+        description_parts.append(f"Top Brands: {', '.join(brands[:5])}")
+        
+    # 3. Ключевые действия (Edges)
+    # Сортируем ребра по весу
+    edges = sorted(subgraph.edges(data=True), key=lambda x: x[2].get("weight", 1), reverse=True)[:8]
+    actions = []
     
-    # Топ связи (только топ 3, очень компактно)
-    if top_edges:
-        edge_parts = []
-        for u, v, weight in top_edges[:3]:
-            u_type = graph.nodes[u].get("type", "?")[0]  # Первая буква
-            v_type = graph.nodes[v].get("type", "?")[0]
-            edge_parts.append(f"{u_type}→{v_type}:{weight}")
-        parts.append("С:" + ",".join(edge_parts))
-    
-    # Статистика (одна строка)
-    if graph.number_of_nodes() > 0:
-        avg_degree = sum(degrees.values()) / graph.number_of_nodes()
-        parts.append(f"Ст:{graph.number_of_nodes()}н,{graph.number_of_edges()}с,{avg_degree:.1f}ср")
-    
-    return "|".join(parts)  # Разделитель | вместо переносов строк
+    for u, v, data in edges:
+        weight = data.get("weight", 1)
+        # Определяем тип действия по весу
+        action = "interacted"
+        if weight >= 5: action = "bought"
+        elif weight >= 3: action = "cart"
+        elif weight >= 2: action = "viewed"
+        
+        # Получаем понятные имена
+        u_data = subgraph.nodes[u]
+        v_data = subgraph.nodes[v]
+        
+        u_name = u_data.get("category") or u_data.get("brand_name") or u
+        v_name = v_data.get("category") or v_data.get("brand_name") or v
+        
+        # Улучшаем имена брендов
+        if brands_map:
+            if u_data.get("type") == "brand":
+                bid = str(u_data.get("brand_id", ""))
+                u_name = brands_map.get(bid, u_name)
+            if v_data.get("type") == "brand":
+                bid = str(v_data.get("brand_id", ""))
+                v_name = brands_map.get(bid, v_name)
+        
+        actions.append(f"{u_name} -> {action} -> {v_name}")
+        
+    if actions:
+        description_parts.append("Actions:\n" + "\n".join(actions))
+        
+    return "\n".join(description_parts)
 
 
 def analyze_graph_with_yandexgpt(

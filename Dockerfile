@@ -14,8 +14,10 @@ WORKDIR /app
 # Копируем ТОЛЬКО файлы зависимостей (для кэширования слоя)
 COPY requirements.txt .
 
-# Устанавливаем Python зависимости (этот слой будет кэшироваться)
-RUN pip install --no-cache-dir -r requirements.txt
+# Устанавливаем Python зависимости
+# Docker автоматически кэширует этот слой, если requirements.txt не изменился
+# При повторных сборках с тем же requirements.txt этот слой будет использован из кэша
+RUN pip install -r requirements.txt
 
 # Копируем весь код приложения (отдельный слой, пересобирается только при изменении кода)
 COPY . .
