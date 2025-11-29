@@ -736,8 +736,64 @@ def create_user_profile(
                     profile["top_category"] = profile["top_brand_category"]
                     print(f"   ℹ Использована top_brand_category как top_category: {profile['top_category']}")
             else:
-                print(f"⚠ Не найдено категорий для {len(profile['brand_ids'])} брендов пользователя")
-                print(f"   Brand IDs пользователя: {profile['brand_ids'][:5]}...")
+                # Если brands_categories_map не содержит категорий, но есть brand_ids, пытаемся извлечь из items
+                if profile.get("brand_ids") and items_with_embeddings:
+                    print(f"   🔍 Попытка извлечения категорий для {len(profile['brand_ids'])} брендов из items каталогов...")
+                    brand_categories_from_items = []
+                    for brand_id in profile["brand_ids"]:
+                        brand_id_str = str(brand_id)
+                        if brand_id_str.endswith(".0"):
+                            brand_id_str = brand_id_str[:-2]
+                        
+                        # Ищем категорию в items каталогах по brand_id
+                        for catalog_name, items_df in items_with_embeddings.items():
+                            if items_df.height == 0:
+                                continue
+                            
+                            # Проверяем наличие brand_id и category в каталоге
+                            if "brand_id" not in items_df.columns or "category" not in items_df.columns:
+                                continue
+                            
+                            # Фильтруем по brand_id
+                            brand_items = items_df.filter(
+                                pl.col("brand_id").cast(pl.Utf8) == brand_id_str
+                            )
+                            
+                            if brand_items.height > 0:
+                                # Берем наиболее частую категорию для этого бренда
+                                valid_cats = brand_items.filter(
+                                    pl.col("category").is_not_null() & 
+                                    (pl.col("category") != "") & 
+                                    (pl.col("category").cast(pl.Utf8) != "nan")
+                                )
+                                
+                                if valid_cats.height > 0:
+                                    top_cat = valid_cats["category"].mode().to_list()
+                                    if top_cat:
+                                        brand_categories_from_items.append(top_cat[0])
+                                        print(f"      ✅ Найдена категория '{top_cat[0]}' для бренда {brand_id_str} из {catalog_name}")
+                                        break  # Нашли, переходим к следующему бренду
+                    
+                    if brand_categories_from_items:
+                        from collections import Counter
+                        profile["brand_categories"] = brand_categories_from_items
+                        profile["top_brand_category"] = Counter(brand_categories_from_items).most_common(1)[0][0]
+                        print(f"   ✅ Извлечено {len(brand_categories_from_items)} категорий брендов из items каталогов")
+                        print(f"   ✅ top_brand_category: {profile['top_brand_category']}")
+                        
+                        # Fallback: если top_category не найдена, используем top_brand_category
+                        if not profile.get("top_category"):
+                            profile["top_category"] = profile["top_brand_category"]
+                            print(f"   ℹ Использована top_brand_category (из items) как top_category: {profile['top_category']}")
+                    
+                    # Если категории все еще не найдены, используем эвристики
+                    if not profile.get("top_category") and not profile.get("top_brand_category"):
+                        profile["top_category"] = _determine_category_by_heuristics(profile)
+                        if profile["top_category"]:
+                            print(f"   ℹ Определена категория по эвристикам: {profile['top_category']}")
+                else:
+                    print(f"   Нет brand_ids для поиска категорий")
+                
                 if brands_categories_map:
                     print(f"   Доступные ключи в brands_categories_map: {list(brands_categories_map.keys())[:10]}...")
         else:
@@ -756,6 +812,13 @@ def create_user_profile(
     if not profile.get("top_category") and profile.get("top_brand_category"):
         profile["top_category"] = profile["top_brand_category"]
         print(f"   ℹ Финальный fallback: использована top_brand_category как top_category: {profile['top_category']}")
+    
+    # Финальный fallback 2: если категория все еще не найдена, используем эвристики
+    if not profile.get("top_category"):
+        category_from_heuristics = _determine_category_by_heuristics(profile)
+        if category_from_heuristics:
+            profile["top_category"] = category_from_heuristics
+            print(f"   ℹ Финальный fallback (эвристики): определена категория '{profile['top_category']}'")
     
     # Временные характеристики
     # Объединяем события для вычисления временных характеристик
@@ -891,6 +954,57 @@ def create_user_profile(
         profile["embedding_diversity"] = 0.0
     
     return profile
+
+
+def _determine_category_by_heuristics(profile: Dict) -> Optional[str]:
+    """
+    Определяет категорию пользователя по эвристикам, если категория не найдена в данных.
+    
+    Использует паттерны поведения, суммы транзакций, количество покупок для определения
+    наиболее вероятной категории интересов пользователя.
+    
+    :param profile: Профиль пользователя
+    :return: Название категории или None
+    """
+    # Эвристики на основе статистики пользователя
+    avg_tx = profile.get('avg_tx', 0)
+    total_tx = profile.get('total_tx', 0)
+    num_payments = profile.get('num_payments', 0)
+    num_views = profile.get('num_views', 0)
+    max_tx = profile.get('max_tx', 0)
+    
+    # Эвристика 1: Высокие суммы транзакций -> вероятно electronics или real_estate
+    if max_tx > 1000 or total_tx > 5000:
+        if num_payments < 5:
+            return "electronics"  # Крупные, редкие покупки
+        else:
+            return "real_estate"  # Много крупных покупок
+    
+    # Эвристика 2: Средние суммы, много покупок -> retail, clothing, food
+    if num_payments > 10 and avg_tx < 100:
+        if num_views > num_payments * 2:
+            return "clothing"  # Много просмотров перед покупкой
+        else:
+            return "food"  # Частые покупки
+    
+    # Эвристика 3: Низкие суммы, часто -> food, pharmacy
+    if avg_tx < 50 and num_payments > 5:
+        return "pharmacy" if num_payments > 20 else "food"
+    
+    # Эвристика 4: Средние суммы, мало покупок -> entertainment, books
+    if 50 <= avg_tx <= 200 and num_payments <= 5:
+        return "entertainment"
+    
+    # Эвристика 5: Много просмотров, мало покупок -> research behavior -> electronics
+    if num_views > 20 and num_payments <= 3:
+        return "electronics"
+    
+    # Эвристика 6: По умолчанию - retail для активных пользователей
+    if num_payments > 0 or num_views > 0:
+        return "retail"
+    
+    # Если нет активности, возвращаем None
+    return None
 
 
 def profile_to_features(profile: Dict) -> List[float]:

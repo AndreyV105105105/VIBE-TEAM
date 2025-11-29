@@ -16,6 +16,7 @@ from src.features.graph_analyzer import analyze_graph_with_yandexgpt, generate_r
 from src.modeling.nbo_model import recommend as ml_recommend
 from src.modeling.rule_engine import RuleEngine
 from src.app.explainer import explain_recommendation
+from src.utils.category_finder import find_categories_for_brands_aggressive
 from typing import Dict as TypingDict
 
 
@@ -1025,6 +1026,34 @@ def process_user(
                 print(f"⚠ Ошибка при извлечении категорий брендов из items_catalog: {e}")
                 import traceback
                 print(f"   Детали: {traceback.format_exc()}")
+        
+        # АГРЕССИВНЫЙ ПОИСК КАТЕГОРИЙ: Последняя попытка найти категории для всех брендов
+        if user_brand_ids_normalized and loader:
+            # Собираем item_id пользователя для дополнительного поиска
+            user_item_ids_list = []
+            if user_marketplace.height > 0 and "item_id" in user_marketplace.columns:
+                user_item_ids_list.extend(user_marketplace["item_id"].unique().to_list())
+            if user_retail.height > 0 and "item_id" in user_retail.columns:
+                user_item_ids_list.extend(user_retail["item_id"].unique().to_list())
+            
+            # Вызываем агрессивный поиск категорий
+            aggressive_categories = find_categories_for_brands_aggressive(
+                brand_ids=user_brand_ids_normalized,
+                items_catalog=items_catalog,
+                loader=loader,
+                user_item_ids=user_item_ids_list if user_item_ids_list else None
+            )
+            
+            # Обновляем brands_categories_map найденными категориями
+            if aggressive_categories:
+                found_count = 0
+                for brand_id, category in aggressive_categories.items():
+                    if brand_id not in brands_categories_map or not brands_categories_map.get(brand_id):
+                        brands_categories_map[brand_id] = category
+                        found_count += 1
+                
+                if found_count > 0:
+                    print(f"✅ Агрессивный поиск нашел категории для {found_count} брендов")
         
         user_events = {
             "marketplace": user_marketplace,
