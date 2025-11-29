@@ -32,10 +32,17 @@ class NBOModel:
         if model_path is None:
             # Путь относительно текущей рабочей директории
             # В Docker контейнере WORKDIR = /app, поэтому models/nbo_model.pkl -> /app/models/nbo_model.pkl
-            default_path = Path.cwd() / "models" / "nbo_model.pkl"
-            self.model_path = str(default_path)
+            # Создаем абсолютный путь от рабочей директории
+            cwd = Path.cwd()
+            models_dir = cwd / "models"
+            default_path = models_dir / "nbo_model.pkl"
+            # Делаем путь абсолютным
+            self.model_path = str(default_path.resolve())
+            print(f"📁 Путь модели установлен: {self.model_path}")
         else:
-            self.model_path = model_path
+            # Преобразуем в абсолютный путь
+            self.model_path = str(Path(model_path).resolve())
+            print(f"📁 Путь модели установлен: {self.model_path}")
         self.model: Optional[RandomForestRegressor] = None
         self.scaler: Optional[StandardScaler] = None
         self.products: List[str] = []
@@ -246,8 +253,17 @@ class NBOModel:
                 # Если путь относительный, делаем его абсолютным от текущей рабочей директории
                 model_path = Path.cwd() / model_path
             
+            # Преобразуем в абсолютный путь
+            model_path = model_path.resolve()
+            
+            print(f"💾 Попытка сохранения модели:")
+            print(f"   - Абсолютный путь: {model_path}")
+            print(f"   - Директория существует: {model_path.parent.exists()}")
+            print(f"   - Текущая рабочая директория: {Path.cwd()}")
+            
             # Создаем директорию, если её нет
             model_path.parent.mkdir(parents=True, exist_ok=True)
+            print(f"   - Директория создана/проверена: {model_path.parent}")
             
             data = {
                 "model": self.model,
@@ -256,7 +272,9 @@ class NBOModel:
             }
             
             # Сохраняем модель
+            print(f"   - Сохранение данных модели (размер: {len(self.products)} продуктов)...")
             joblib.dump(data, str(model_path))
+            print(f"   - Данные записаны на диск")
             
             # Обновляем путь модели на абсолютный
             self.model_path = str(model_path)
@@ -264,12 +282,27 @@ class NBOModel:
             # Проверяем, что файл действительно создан
             if model_path.exists():
                 file_size = model_path.stat().st_size
-                print(f"✅ Модель успешно сохранена в: {self.model_path} (размер: {file_size / 1024:.2f} KB)")
+                print(f"✅ Модель успешно сохранена в: {self.model_path}")
+                print(f"   - Размер файла: {file_size / 1024:.2f} KB ({file_size} байт)")
+                print(f"   - Файл доступен для чтения: {model_path.is_file()}")
+                
+                # Дополнительная проверка - пробуем загрузить обратно
+                try:
+                    test_load = joblib.load(str(model_path))
+                    if "model" in test_load and "scaler" in test_load and "products" in test_load:
+                        print(f"   - ✅ Проверка: модель успешно загружена обратно (валидация прошла)")
+                    else:
+                        print(f"   - ⚠️  Предупреждение: структура загруженной модели не соответствует ожидаемой")
+                except Exception as load_err:
+                    print(f"   - ⚠️  Предупреждение: не удалось загрузить модель для проверки: {load_err}")
             else:
-                print(f"⚠️  Предупреждение: файл модели не найден после сохранения: {self.model_path}")
+                print(f"⚠️  ОШИБКА: файл модели НЕ найден после сохранения!")
+                print(f"   - Ожидаемый путь: {self.model_path}")
+                print(f"   - Родительская директория: {model_path.parent}")
+                print(f"   - Содержимое родительской директории: {list(model_path.parent.iterdir()) if model_path.parent.exists() else 'не существует'}")
                 
         except Exception as e:
-            print(f"❌ Ошибка при сохранении модели в {self.model_path}: {e}")
+            print(f"❌ ОШИБКА при сохранении модели в {self.model_path}: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -304,7 +337,17 @@ class NBOModel:
         
         # Сохраняем модель
         print(f"💾 Сохранение модели в: {self.model_path}")
+        print(f"📂 Абсолютный путь: {Path(self.model_path).resolve()}")
+        print(f"📂 Текущая рабочая директория: {Path.cwd()}")
         self.save_model()
+        
+        # Дополнительная проверка после сохранения
+        saved_path = Path(self.model_path).resolve()
+        if saved_path.exists():
+            print(f"✅ ПОДТВЕРЖДЕНО: Модель существует по пути: {saved_path}")
+        else:
+            print(f"❌ ВНИМАНИЕ: Модель не найдена по пути: {saved_path}")
+            print(f"   Проверьте права доступа и наличие директории")
     
     def train_with_yandexgpt(
         self,

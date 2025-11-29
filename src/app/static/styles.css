@@ -1,0 +1,169 @@
+/* ПСБ - Цветовая схема бренда */
+:root {
+    --psb-dark-blue: #0A2540;
+    --psb-medium-blue: #1A3A5A;
+    --psb-light-blue: #2A4A6A;
+    --psb-orange: #FF6B00;
+    --psb-orange-light: #FF8C42;
+    --psb-white: #FFFFFF;
+    --psb-gray: #F5F5F5;
+    --psb-text-dark: #333333;
+}
+
+/* Основные стили */
+.main {
+    background-color: var(--psb-gray);
+}
+
+/* Заголовок с логотипом */
+.logo-container {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 20px 0;
+    background: linear-gradient(135deg, var(--psb-dark-blue) 0%, var(--psb-medium-blue) 100%);
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.logo-container img {
+    height: 50px;
+    margin-left: 20px;
+}
+
+.logo-text {
+    color: var(--psb-white);
+    font-size: 28px;
+    font-weight: bold;
+    margin: 0;
+}
+
+/* Боковая панель */
+.sidebar .sidebar-content {
+    background-color: var(--psb-dark-blue);
+}
+
+.sidebar h1, .sidebar h2, .sidebar h3 {
+    color: var(--psb-white);
+}
+
+/* Кнопки */
+.stButton > button {
+    background-color: var(--psb-orange);
+    color: var(--psb-white);
+    border: none;
+    border-radius: 5px;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.stButton > button:hover {
+    background-color: var(--psb-orange-light);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(255, 107, 0, 0.3);
+}
+
+/* Метрики */
+[data-testid="stMetricValue"] {
+    color: var(--psb-dark-blue);
+    font-weight: bold;
+}
+
+[data-testid="stMetricLabel"] {
+    color: var(--psb-medium-blue);
+}
+
+/* Вкладки */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+    background-color: var(--psb-gray);
+}
+
+.stTabs [data-baseweb="tab"] {
+    background-color: var(--psb-white);
+    color: var(--psb-dark-blue);
+    border-radius: 5px 5px 0 0;
+    font-weight: 500;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: var(--psb-orange);
+    color: var(--psb-white);
+}
+
+/* Прогресс-бары */
+.stProgress > div > div > div {
+    background-color: var(--psb-orange);
+}
+
+/* Информационные блоки */
+.stAlert {
+    border-left: 4px solid var(--psb-orange);
+}
+
+/* Карточки рекомендаций */
+.recommendation-card {
+    background-color: var(--psb-white);
+    border: 2px solid var(--psb-light-blue);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 4px rgba(10, 37, 64, 0.1);
+    transition: all 0.3s ease;
+}
+
+.recommendation-card:hover {
+    box-shadow: 0 4px 8px rgba(10, 37, 64, 0.2);
+    border-color: var(--psb-orange);
+}
+
+/* Разделители */
+hr {
+    border-color: var(--psb-light-blue);
+    opacity: 0.3;
+}
+
+/* Текст */
+h1, h2, h3 {
+    color: var(--psb-dark-blue);
+}
+
+/* Граф */
+.graph-container {
+    background-color: var(--psb-white);
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(10, 37, 64, 0.1);
+}
+
+/* JSON блоки */
+.stJson {
+    background-color: var(--psb-gray);
+    border: 1px solid var(--psb-light-blue);
+    border-radius: 5px;
+}
+
+/* Чекбоксы и инпуты */
+.stCheckbox label, .stTextInput label {
+    color: var(--psb-dark-blue);
+    font-weight: 500;
+}
+
+/* Успешные сообщения */
+.stSuccess {
+    background-color: rgba(26, 58, 90, 0.1);
+    border-left: 4px solid var(--psb-medium-blue);
+}
+
+/* Предупреждения */
+.stWarning {
+    background-color: rgba(255, 107, 0, 0.1);
+    border-left: 4px solid var(--psb-orange);
+}
+
+/* Ошибки */
+.stError {
+    background-color: rgba(220, 53, 69, 0.1);
+    border-left: 4px solid #DC3545;
+}
+

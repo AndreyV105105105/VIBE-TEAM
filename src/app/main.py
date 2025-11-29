@@ -24,6 +24,296 @@ from pyvis.network import Network
 import tempfile
 import os
 
+# Загружаем CSS стили ПСБ
+def load_psb_styles():
+    """Загружает CSS стили для оформления в стиле ПСБ"""
+    css_path = Path(__file__).parent / "static" / "styles.css"
+    if css_path.exists():
+        with open(css_path, 'r', encoding='utf-8') as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    
+    # Дополнительные inline стили для Streamlit
+    st.markdown("""
+    <style>
+    /* Скрываем стандартный заголовок Streamlit */
+    header[data-testid="stHeader"] {
+        background: linear-gradient(135deg, #0A2540 0%, #1A3A5A 100%);
+        padding: 1rem;
+    }
+    
+    /* Основной контент - темный фон в стиле ПСБ */
+    .main .block-container {
+        padding-top: 2rem;
+        background-color: #0F1B2E;
+    }
+    
+    /* Основной фон страницы */
+    .main {
+        background-color: #0F1B2E;
+    }
+    
+    /* Заголовки на темном фоне - белые */
+    .main h1, .main h2, .main h3 {
+        color: #FFFFFF !important;
+    }
+    
+    /* Обычный текст на темном фоне - светло-серый */
+    .main p {
+        color: #E0E0E0 !important;
+    }
+    
+    /* Боковая панель */
+    section[data-testid="stSidebar"] {
+        background-color: #0A2540;
+    }
+    
+    /* Все заголовки и текст в боковой панели - белый */
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] h4,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] .stMarkdown p,
+    section[data-testid="stSidebar"] .stMarkdown strong,
+    section[data-testid="stSidebar"] .stText,
+    section[data-testid="stSidebar"] div,
+    section[data-testid="stSidebar"] span {
+        color: #FFFFFF !important;
+    }
+    
+    /* Инпуты в боковой панели */
+    section[data-testid="stSidebar"] input,
+    section[data-testid="stSidebar"] textarea {
+        background-color: #1A3A5A !important;
+        color: #FFFFFF !important;
+        border-color: #2A4A6A !important;
+    }
+    
+    /* Селектбоксы и слайдеры в боковой панели */
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .stSlider label,
+    section[data-testid="stSidebar"] .stCheckbox label,
+    section[data-testid="stSidebar"] .stTextInput label {
+        color: #FFFFFF !important;
+    }
+    
+    /* Информационные блоки в боковой панели */
+    section[data-testid="stSidebar"] .stSuccess,
+    section[data-testid="stSidebar"] .stWarning,
+    section[data-testid="stSidebar"] .stInfo,
+    section[data-testid="stSidebar"] .stError {
+        background-color: rgba(255, 255, 255, 0.1) !important;
+        color: #FFFFFF !important;
+        border-left: 4px solid #FF6B00;
+    }
+    
+    /* Кнопки в боковой панели */
+    section[data-testid="stSidebar"] button {
+        background-color: #FF6B00 !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Убираем темный текст на темном фоне в основном контенте */
+    .main .stMarkdown, .main .stText {
+        color: #E0E0E0 !important;
+    }
+    
+    /* Метрики Streamlit - белый текст на синем фоне */
+    .main [data-testid="stMetricContainer"],
+    .main [data-testid="stMetricContainer"] *,
+    .main div[data-testid="stMetricContainer"] {
+        background: linear-gradient(135deg, #1A3A5A 0%, #0A2540 100%) !important;
+        border: 1px solid #2A4A6A !important;
+        border-radius: 10px !important;
+        padding: 20px !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    .main [data-testid="stMetricContainer"]:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+        transform: translateY(-2px) !important;
+        border-color: #FF6B00 !important;
+    }
+    
+    /* Значения метрик - белые */
+    .main [data-testid="stMetricValue"],
+    .main [data-testid="stMetricValue"] *,
+    .main [data-testid="stMetricValue"] div,
+    .main [data-testid="stMetricValue"] span,
+    .main [data-testid="stMetricContainer"] [data-testid="stMetricValue"],
+    .main div[data-testid="stMetricValue"] {
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
+    }
+    
+    /* Метки метрик - белые */
+    .main [data-testid="stMetricLabel"],
+    .main [data-testid="stMetricLabel"] *,
+    .main [data-testid="stMetricLabel"] div,
+    .main [data-testid="stMetricLabel"] span,
+    .main [data-testid="stMetricContainer"] [data-testid="stMetricLabel"],
+    .main div[data-testid="stMetricLabel"],
+    .main [data-testid="stMetricContainer"] label {
+        color: #FFFFFF !important;
+        opacity: 0.95 !important;
+        font-weight: 500 !important;
+    }
+    
+    /* Все дочерние элементы в контейнере метрик - белые */
+    .main [data-testid="stMetricContainer"] p,
+    .main [data-testid="stMetricContainer"] div,
+    .main [data-testid="stMetricContainer"] span,
+    .main [data-testid="stMetricContainer"] label {
+        color: #FFFFFF !important;
+    }
+    
+    /* Улучшенные вкладки */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: #0A2540;
+        padding: 6px;
+        border-radius: 10px;
+        gap: 4px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        padding: 12px 24px;
+        font-weight: 500;
+        font-size: 1.05em;
+        transition: all 0.3s ease;
+        border: 2px solid transparent;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #FF6B00 0%, #FF8C42 100%);
+        color: #FFFFFF !important;
+        box-shadow: 0 3px 8px rgba(255, 107, 0, 0.35);
+        border: 2px solid #FF6B00;
+    }
+    
+    .stTabs [aria-selected="false"] {
+        background-color: #1A3A5A;
+        color: #FFFFFF;
+    }
+    
+    .stTabs [aria-selected="false"]:hover {
+        background-color: #2A4A6A;
+    }
+    
+    /* Улучшенные информационные блоки - темные с белым текстом */
+    .main .stSuccess {
+        background: linear-gradient(135deg, rgba(10, 37, 64, 0.4) 0%, rgba(26, 58, 90, 0.5) 100%);
+        border-left: 5px solid #0A2540;
+        border-radius: 8px;
+        padding: 18px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        color: #FFFFFF !important;
+    }
+    
+    .main .stSuccess p, .main .stSuccess div, .main .stSuccess span {
+        color: #FFFFFF !important;
+    }
+    
+    .main .stInfo {
+        background: linear-gradient(135deg, rgba(26, 58, 90, 0.4) 0%, rgba(10, 37, 64, 0.5) 100%);
+        border-left: 5px solid #FF6B00;
+        border-radius: 8px;
+        padding: 18px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        color: #FFFFFF !important;
+    }
+    
+    .main .stInfo p, .main .stInfo div, .main .stInfo span {
+        color: #FFFFFF !important;
+    }
+    
+    .main .stWarning {
+        background: linear-gradient(135deg, rgba(26, 58, 90, 0.4) 0%, rgba(10, 37, 64, 0.5) 100%);
+        border-left: 5px solid #FFC107;
+        border-radius: 8px;
+        padding: 18px;
+        color: #FFFFFF !important;
+    }
+    
+    .main .stWarning p, .main .stWarning div, .main .stWarning span {
+        color: #FFFFFF !important;
+    }
+    
+    /* Улучшенные кнопки */
+    .main .stButton > button {
+        background: linear-gradient(135deg, #FF6B00 0%, #FF8C42 100%);
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        padding: 12px 24px;
+        transition: all 0.3s ease;
+        box-shadow: 0 3px 8px rgba(255, 107, 0, 0.3);
+        font-size: 1.05em;
+    }
+    
+    .main .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 12px rgba(255, 107, 0, 0.4);
+    }
+    
+    /* Улучшенные разделители */
+    .main hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2) 50%, transparent);
+        margin: 35px 0;
+    }
+    
+    /* Divider от Streamlit */
+    .main [data-testid="stDivider"] {
+        border-color: rgba(255, 255, 255, 0.2) !important;
+    }
+    
+    .main [data-testid="stDivider"] div {
+        background-color: rgba(255, 255, 255, 0.2) !important;
+    }
+    
+    /* Улучшенные JSON блоки - темные */
+    .main [data-testid="stJson"] {
+        background-color: #1A3A5A;
+        border: 1px solid #2A4A6A;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        color: #FFFFFF !important;
+    }
+    
+    /* Улучшенные карточки рекомендаций */
+    .recommendation-card {
+        background: linear-gradient(135deg, #FFFFFF 0%, #FAFAFA 100%);
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s ease;
+        border: 1px solid #E8E8E8;
+    }
+    
+    .recommendation-card:hover {
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+        transform: translateY(-3px);
+    }
+    
+    /* Футер в боковой панели - белый */
+    section[data-testid="stSidebar"] footer {
+        color: #FFFFFF !important;
+    }
+    
+    /* Улучшенные заголовки на темном фоне */
+    .dark-bg h1, .dark-bg h2, .dark-bg h3, .dark-bg p, .dark-bg span {
+        color: #FFFFFF !important;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Настройка страницы
 st.set_page_config(
@@ -33,8 +323,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Заголовок
-st.title("🏦 Система рекомендаций Next Best Offer")
+# Загружаем стили
+load_psb_styles()
+
+# Логотип и заголовок на темно-синем фоне
+static_dir = Path(__file__).parent / "static"
+logo_path = static_dir / "logo.jpg"
+
+st.markdown("""
+<div style="background: linear-gradient(135deg, #0A2540 0%, #1A3A5A 100%); padding: 30px 35px; border-radius: 12px; margin-bottom: 30px; display: flex; align-items: center; gap: 25px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);">
+""", unsafe_allow_html=True)
+
+col1, col2 = st.columns([2.2, 5.8])
+with col1:
+    if logo_path.exists():
+        st.image(str(logo_path), width=220)
+    else:
+        st.markdown('<div style="color: #FFFFFF; font-weight: bold; font-size: 32px; padding: 10px;">ПСБ</div>', unsafe_allow_html=True)
+
+with col2:
+    st.markdown("""
+    <div style="padding-top: 8px;">
+        <h1 style="color: #FFFFFF !important; margin: 0; font-size: 34px; font-weight: 700; letter-spacing: 0.3px; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);">Система рекомендаций Next Best Offer</h1>
+        <p style="color: #FFFFFF !important; font-size: 1.15em; margin-top: 12px; opacity: 0.95; font-weight: 400; letter-spacing: 0.2px;">Персонализированные рекомендации банковских продуктов</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("---")
 
 # Боковая панель с настройками
@@ -47,7 +362,7 @@ with st.sidebar:
     user_id = None
     
     with user_tab1:
-        st.write("**Введите или найдите ID пользователя**")
+        st.markdown('<p style="color: #FFFFFF;"><strong>Введите или найдите ID пользователя</strong></p>', unsafe_allow_html=True)
         
         user_id_input = st.text_input(
             "ID пользователя",
@@ -80,7 +395,7 @@ with st.sidebar:
             with st.spinner("Поиск пользователей..."):
                 matching_users = search_users_by_pattern(search_pattern, limit=20)
                 if matching_users:
-                    st.write(f"Найдено пользователей: {len(matching_users)}")
+                    st.markdown(f'<p style="color: #FFFFFF;">Найдено пользователей: {len(matching_users)}</p>', unsafe_allow_html=True)
                     selected_user = st.selectbox(
                         "Выберите пользователя:",
                         options=[""] + matching_users,
@@ -93,7 +408,7 @@ with st.sidebar:
                     st.info("Пользователи не найдены")
     
     with user_tab2:
-        st.write("**Выберите пользователя из списка**")
+        st.markdown('<p style="color: #FFFFFF;"><strong>Выберите пользователя из списка</strong></p>', unsafe_allow_html=True)
         
         if st.button("🔄 Обновить список", key="refresh_users"):
             st.session_state['users_list'] = None
@@ -128,7 +443,7 @@ with st.sidebar:
         users_list = st.session_state.get('users_list', [])
         
         if users_list:
-            st.write(f"Доступно пользователей: {len(users_list)}")
+            st.markdown(f'<p style="color: #FFFFFF;">Доступно пользователей: {len(users_list)}</p>', unsafe_allow_html=True)
             selected_user = st.selectbox(
                 "Выберите пользователя:",
                 options=[""] + users_list[:100],  # Показываем первые 100
@@ -182,6 +497,15 @@ with st.sidebar:
         type="primary",
         use_container_width=True
     )
+    
+    # Футер в боковой панели
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #FFFFFF; padding: 10px;">
+        <p style="font-size: 0.8em; opacity: 0.8;">© ПСБ</p>
+        <p style="font-size: 0.7em; opacity: 0.6;">Система рекомендаций</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Основной контент
 if analyze_button:
@@ -208,7 +532,12 @@ if 'result' in st.session_state:
     result = st.session_state['result']
     user_id = st.session_state.get('user_id', 'unknown')
     
-    st.success(f"✅ Анализ пользователя {user_id} завершен!")
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, rgba(10, 37, 64, 0.3) 0%, rgba(26, 58, 90, 0.4) 100%); 
+                border-left: 5px solid #FF6B00; border-radius: 10px; padding: 20px; margin-bottom: 25px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);">
+        <p style="color: #FFFFFF !important; font-size: 1.15em; font-weight: 600; margin: 0; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);">✅ Анализ пользователя <strong style="color: #FFFFFF !important;">{user_id}</strong> завершен!</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Вкладки для разных разделов
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -219,7 +548,7 @@ if 'result' in st.session_state:
     ])
     
     with tab1:
-        st.header("Рекомендации продуктов")
+        st.markdown('<h2 style="color: #FFFFFF !important; margin-bottom: 20px;">📊 Рекомендации продуктов</h2>', unsafe_allow_html=True)
         
         if result['recommendations']:
             # Нормализация scores для прогресс-бара
@@ -248,32 +577,60 @@ if 'result' in st.session_state:
                 normalize_score = lambda s: (s - min_score) / (max_score - min_score)
             
             for i, rec in enumerate(result['recommendations'], 1):
-                with st.container():
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.subheader(f"{i}. {rec['product']}")
-                        st.write(f"**Объяснение:** {rec['reason']}")
-                        st.caption(f"Источник: {rec['source']}")
-                    
-                    with col2:
-                        score = rec['score']
-                        st.metric("Оценка", f"{score:.2f}")
-                        
-                        # Прогресс-бар для визуализации оценки (нормализованный от 0 до 1)
-                        # st.progress() принимает значения от 0 до 1
-                        normalized_progress = normalize_score(score)
-                        st.progress(normalized_progress)
-                        
-                        # Показываем нормализованное значение для отладки (можно убрать)
-                        # st.caption(f"Нормализовано: {normalized_progress:.2f}")
-                    
-                    st.divider()
+                # Определяем цвет рамки в зависимости от источника
+                border_color = "#FF6B00" if "ML" in rec['source'] else "#1A3A5A"
+                badge_bg = "#FF6B00" if "ML" in rec['source'] else "#0A2540"
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #1A3A5A 0%, #0A2540 100%); border-left: 6px solid {border_color}; border-radius: 12px; padding: 25px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); transition: all 0.3s ease;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 18px;">
+                        <h3 style="color: #FFFFFF !important; margin: 0; font-size: 26px; font-weight: 700; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);">#{i}. {rec['product']}</h3>
+                        <span style="background: {badge_bg}; color: #FFFFFF; padding: 8px 16px; border-radius: 20px; font-size: 0.9em; font-weight: 600; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);">{rec['source']}</span>
+                    </div>
+                    <div style="background-color: rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 18px; margin-bottom: 15px; border: 1px solid rgba(255, 255, 255, 0.2);">
+                        <p style="color: #FFFFFF !important; margin: 0; line-height: 1.7; font-size: 1.08em; font-weight: 400; opacity: 0.95;">{rec['reason']}</p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Метрики в отдельной строке на синем фоне
+                normalized_progress = normalize_score(rec['score'])
+                ml_score_val = rec.get('ml_score', 0) if 'ml_score' in rec else 0
+                rule_score_val = rec.get('rule_score', 0)
+                
+                metric_label = "ML модель" if ml_score_val > 0 else ("Правила" if rule_score_val > 0 else "Комбо")
+                metric_value = f"{ml_score_val:.2f}" if ml_score_val > 0 else (f"{rule_score_val:.2f}" if rule_score_val > 0 else "✓")
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #2A4A6A 0%, #1A3A5A 100%); border-radius: 10px; padding: 20px; margin-top: 15px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);">
+                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px; align-items: center;">
+                        <div>
+                            <p style="color: #FFFFFF !important; font-weight: 600; margin-bottom: 8px; font-size: 0.95em; opacity: 0.9;">Релевантность: <strong style="color: #FFFFFF !important;">{normalized_progress*100:.1f}%</strong></p>
+                        </div>
+                        <div style="text-align: center;">
+                            <p style="color: #FFFFFF !important; font-size: 0.85em; margin-bottom: 5px; opacity: 0.8;">Общая оценка</p>
+                            <p style="color: #FFFFFF !important; font-size: 1.5em; font-weight: 700; margin: 0;">{rec['score']:.2f}</p>
+                        </div>
+                        <div style="text-align: center;">
+                            <p style="color: #FFFFFF !important; font-size: 0.85em; margin-bottom: 5px; opacity: 0.8;">{metric_label}</p>
+                            <p style="color: #FFFFFF !important; font-size: 1.5em; font-weight: 700; margin: 0;">{metric_value}</p>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div style="background-color: rgba(0, 0, 0, 0.2); border-radius: 10px; height: 8px; overflow: hidden;">
+                            <div style="background: linear-gradient(90deg, #FF6B00 0%, #FF8C42 100%); height: 100%; width: {normalized_progress*100}%; transition: width 0.3s ease;"></div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if i < len(result['recommendations']):
+                    st.markdown('<div style="margin: 30px 0; border-bottom: 2px dashed rgba(255, 255, 255, 0.15);"></div>', unsafe_allow_html=True)
         else:
             st.info("Рекомендации не найдены. Попробуйте другого пользователя.")
     
     with tab2:
-        st.header("Статистика пользователя")
+        st.markdown('<h2 style="color: #FFFFFF !important; margin-bottom: 20px;">📈 Статистика пользователя</h2>', unsafe_allow_html=True)
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -281,26 +638,54 @@ if 'result' in st.session_state:
         graph_stats = result.get('graph_stats', {})
         
         with col1:
-            st.metric("Просмотров", profile.get('num_views', 0))
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1A3A5A 0%, #0A2540 100%); 
+                        border: 1px solid #2A4A6A; border-radius: 10px; padding: 20px; 
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); text-align: center;">
+                <div style="color: #FFFFFF !important; font-size: 0.9em; font-weight: 500; margin-bottom: 8px; opacity: 0.95;">Просмотров</div>
+                <div style="color: #FFFFFF !important; font-size: 2em; font-weight: 700;">""" + str(profile.get('num_views', 0)) + """</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col2:
-            st.metric("Платежей", profile.get('num_payments', 0))
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1A3A5A 0%, #0A2540 100%); 
+                        border: 1px solid #2A4A6A; border-radius: 10px; padding: 20px; 
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); text-align: center;">
+                <div style="color: #FFFFFF !important; font-size: 0.9em; font-weight: 500; margin-bottom: 8px; opacity: 0.95;">Платежей</div>
+                <div style="color: #FFFFFF !important; font-size: 2em; font-weight: 700;">""" + str(profile.get('num_payments', 0)) + """</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col3:
-            st.metric("Узлов в графе", graph_stats.get('nodes', 0))
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1A3A5A 0%, #0A2540 100%); 
+                        border: 1px solid #2A4A6A; border-radius: 10px; padding: 20px; 
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); text-align: center;">
+                <div style="color: #FFFFFF !important; font-size: 0.9em; font-weight: 500; margin-bottom: 8px; opacity: 0.95;">Узлов в графе</div>
+                <div style="color: #FFFFFF !important; font-size: 2em; font-weight: 700;">""" + str(graph_stats.get('nodes', 0)) + """</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col4:
-            st.metric("Связей в графе", graph_stats.get('edges', 0))
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1A3A5A 0%, #0A2540 100%); 
+                        border: 1px solid #2A4A6A; border-radius: 10px; padding: 20px; 
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); text-align: center;">
+                <div style="color: #FFFFFF !important; font-size: 0.9em; font-weight: 500; margin-bottom: 8px; opacity: 0.95;">Связей в графе</div>
+                <div style="color: #FFFFFF !important; font-size: 2em; font-weight: 700;">""" + str(graph_stats.get('edges', 0)) + """</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         st.divider()
         
         # Детальная статистика
-        st.subheader("Детальная информация")
+        st.markdown('<h3 style="color: #FFFFFF !important; margin-top: 30px; margin-bottom: 20px;">📊 Детальная информация</h3>', unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("**Профиль пользователя:**")
+            st.markdown('<p style="color: #FFFFFF !important; font-weight: 600; font-size: 1.1em; margin-bottom: 10px;">👤 Профиль пользователя:</p>', unsafe_allow_html=True)
             # Форматируем значения для отображения
             avg_tx = profile.get('avg_tx', 0)
             total_tx = profile.get('total_tx', 0)
@@ -345,7 +730,7 @@ if 'result' in st.session_state:
                 st.info("Это может быть связано с возвратами или ошибкой в данных. Используются абсолютные значения.")
         
         with col2:
-            st.write("**Статистика графа:**")
+            st.markdown('<p style="color: #FFFFFF !important; font-weight: 600; font-size: 1.1em; margin-bottom: 10px;">🕸️ Статистика графа:</p>', unsafe_allow_html=True)
             st.json({
                 "Узлов": graph_stats.get('nodes', 0),
                 "Связей": graph_stats.get('edges', 0),
@@ -361,7 +746,7 @@ if 'result' in st.session_state:
             st.write(result['graph_analysis'].get('analysis', 'Анализ недоступен'))
     
     with tab3:
-        st.header("Граф поведения пользователя")
+        st.markdown('<h2 style="color: #FFFFFF !important; margin-bottom: 20px;">🕸️ Граф поведения пользователя</h2>', unsafe_allow_html=True)
         
         graph = result.get('graph')
         graph_stats = result.get('graph_stats', {})
@@ -383,12 +768,12 @@ if 'result' in st.session_state:
                 else:
                     graph_to_visualize = graph
                 
-                # Создаем сеть для визуализации
+                # Создаем сеть для визуализации в стиле ПСБ
                 net = Network(
                     height="600px",
                     width="100%",
-                    bgcolor="#222222",
-                    font_color="white",
+                    bgcolor="#0A2540",
+                    font_color="#FFFFFF",
                     directed=True
                 )
                 
@@ -417,12 +802,12 @@ if 'result' in st.session_state:
                 }
                 """)
                 
-                # Добавляем узлы с цветами по типу
+                # Добавляем узлы с цветами в стиле ПСБ
                 node_colors = {
-                    'item': '#FF6B6B',      # Красный для товаров
-                    'brand': '#4ECDC4',    # Бирюзовый для брендов
-                    'start': '#95E1D3',    # Светло-бирюзовый для старта
-                    'category': '#F38181', # Розовый для категорий
+                    'item': '#FF6B00',      # Оранжевый ПСБ для товаров
+                    'brand': '#1A3A5A',    # Синий ПСБ для брендов
+                    'start': '#FFFFFF',    # Белый для старта
+                    'category': '#FF8C42', # Светло-оранжевый для категорий
                     'unknown': '#95A5A6'    # Серый для неизвестных
                 }
                 
@@ -509,18 +894,30 @@ if 'result' in st.session_state:
                 except:
                     pass
                 
-                # Легенда
+                # Легенда в стиле ПСБ
                 st.markdown("---")
                 st.subheader("Легенда")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.markdown("🔴 **Товары** (item)")
-                with col2:
-                    st.markdown("🔵 **Бренды** (brand)")
-                with col3:
-                    st.markdown("🟢 **Старт** (start)")
-                with col4:
-                    st.markdown("🟣 **Категории** (category)")
+                legend_html = """
+                <div style="display: flex; gap: 30px; flex-wrap: wrap; padding: 15px; background-color: #F5F5F5; border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 20px; height: 20px; background-color: #FF6B00; border-radius: 50%;"></div>
+                        <span style="color: #0A2540; font-weight: 500;"><strong>Товары</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 20px; height: 20px; background-color: #1A3A5A; border-radius: 50%;"></div>
+                        <span style="color: #0A2540; font-weight: 500;"><strong>Бренды</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 20px; height: 20px; background-color: #FFFFFF; border: 2px solid #0A2540; border-radius: 50%;"></div>
+                        <span style="color: #0A2540; font-weight: 500;"><strong>Старт</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 20px; height: 20px; background-color: #FF8C42; border-radius: 50%;"></div>
+                        <span style="color: #0A2540; font-weight: 500;"><strong>Категории</strong></span>
+                    </div>
+                </div>
+                """
+                st.markdown(legend_html, unsafe_allow_html=True)
                 
                 # Статистика графа
                 st.markdown("---")
@@ -542,27 +939,27 @@ if 'result' in st.session_state:
                 # Текстовое представление как fallback
                 st.code(f"Узлов: {graph.number_of_nodes()}\nРёбер: {graph.number_of_edges()}")
                 if graph.number_of_nodes() <= 50:
-                    st.write("**Узлы:**")
+                    st.markdown('<p style="color: #FFFFFF !important; font-weight: 600; margin-bottom: 10px;">**Узлы:**</p>', unsafe_allow_html=True)
                     for node in list(graph.nodes())[:20]:
                         neighbors = list(graph.neighbors(node))
-                        st.write(f"- {node} → {neighbors[:5]}")
+                        st.markdown(f'<p style="color: #E0E0E0 !important;">- {node} → {neighbors[:5]}</p>', unsafe_allow_html=True)
         else:
             st.info("Граф пуст или не построен. Недостаточно данных для визуализации.")
         
         # Правила из графа
         if result.get('graph_rules'):
             st.markdown("---")
-            st.subheader("Правила из графа:")
+            st.markdown('<h3 style="color: #FFFFFF !important; margin-bottom: 15px;">📋 Правила из графа:</h3>', unsafe_allow_html=True)
             for rule in result['graph_rules'][:5]:
-                st.write(f"- {rule}")
+                st.markdown(f'<p style="color: #E0E0E0 !important;">- {rule}</p>', unsafe_allow_html=True)
     
     with tab4:
-        st.header("Паттерны поведения")
+        st.markdown('<h2 style="color: #FFFFFF !important; margin-bottom: 20px;">🔍 Паттерны поведения</h2>', unsafe_allow_html=True)
         
         patterns = result.get('patterns', [])
         
         if patterns:
-            st.write(f"Найдено паттернов: **{len(patterns)}**")
+            st.markdown(f'<p style="color: #FFFFFF !important; font-weight: 600; margin-bottom: 15px;">Найдено паттернов: <strong>{len(patterns)}</strong></p>', unsafe_allow_html=True)
             
             for i, pattern in enumerate(patterns, 1):
                 st.code(pattern, language=None)
@@ -570,26 +967,63 @@ if 'result' in st.session_state:
             st.info("Паттерны не найдены")
 
 else:
-    # Начальный экран
-    st.info("👈 Введите ID пользователя и нажмите 'Анализировать' для начала работы")
+    # Начальный экран в стиле ПСБ
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #0A2540 0%, #1A3A5A 100%); padding: 30px; border-radius: 10px; color: #FFFFFF; margin-bottom: 30px;">
+        <h2 style="color: #FFFFFF; margin-top: 0;">👈 Добро пожаловать в систему рекомендаций ПСБ</h2>
+        <p style="font-size: 1.1em; margin-bottom: 0;">Введите ID пользователя в боковой панели и нажмите 'Анализировать' для начала работы</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        <div style="background-color: #FFFFFF; padding: 25px; border-radius: 8px; border-left: 5px solid #FF6B00; box-shadow: 0 2px 4px rgba(10, 37, 64, 0.1);">
+            <h3 style="color: #0A2540; margin-top: 0;">📋 Как использовать:</h3>
+            <ol style="color: #1A3A5A; line-height: 1.8;">
+                <li><strong>Введите ID пользователя</strong> в боковой панели</li>
+                <li><strong>Настройте параметры</strong> (источник данных, использование YandexGPT)</li>
+                <li><strong>Нажмите "Анализировать"</strong></li>
+                <li><strong>Просмотрите результаты</strong> во вкладках</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div style="background-color: #FFFFFF; padding: 25px; border-radius: 8px; border-left: 5px solid #1A3A5A; box-shadow: 0 2px 4px rgba(10, 37, 64, 0.1);">
+            <h3 style="color: #0A2540; margin-top: 0;">✨ Возможности:</h3>
+            <ul style="color: #1A3A5A; line-height: 1.8;">
+                <li>📊 <strong>Рекомендации</strong> - топ продуктов с объяснениями</li>
+                <li>📈 <strong>Статистика</strong> - детальная информация о пользователе</li>
+                <li>🕸️ <strong>Граф поведения</strong> - визуализация поведения</li>
+                <li>🔍 <strong>Паттерны</strong> - найденные паттерны поведения</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.markdown("""
-    ### Как использовать:
-    
-    1. **Введите ID пользователя** в боковой панели
-    2. **Настройте параметры** (источник данных, использование YandexGPT)
-    3. **Нажмите "Анализировать"**
-    4. **Просмотрите результаты** во вкладках:
-       - 📊 Рекомендации - топ продуктов с объяснениями
-       - 📈 Статистика - детальная информация о пользователе
-       - 🕸️ Граф поведения - визуализация поведения
-       - 🔍 Паттерны - найденные паттерны поведения
-    
-    ### Особенности:
-    - Автоматическая загрузка данных из облака
-    - Построение графов поведения
-    - Извлечение паттернов
-    - Генерация объяснений через YandexGPT
-    - Рекомендации на основе ML модели и правил
-    """)
+    <div style="background-color: #F5F5F5; padding: 20px; border-radius: 8px; margin-top: 20px;">
+        <h3 style="color: #0A2540; margin-top: 0;">🚀 Особенности системы:</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top: 15px;">
+            <div style="padding: 15px; background-color: #FFFFFF; border-radius: 5px;">
+                <strong style="color: #FF6B00;">☁️ Облако</strong>
+                <p style="color: #1A3A5A; margin: 5px 0 0 0; font-size: 0.9em;">Автоматическая загрузка данных из облака</p>
+            </div>
+            <div style="padding: 15px; background-color: #FFFFFF; border-radius: 5px;">
+                <strong style="color: #FF6B00;">📊 Графы</strong>
+                <p style="color: #1A3A5A; margin: 5px 0 0 0; font-size: 0.9em;">Построение графов поведения пользователей</p>
+            </div>
+            <div style="padding: 15px; background-color: #FFFFFF; border-radius: 5px;">
+                <strong style="color: #FF6B00;">🤖 ML & AI</strong>
+                <p style="color: #1A3A5A; margin: 5px 0 0 0; font-size: 0.9em;">Рекомендации на основе ML модели и YandexGPT</p>
+            </div>
+            <div style="padding: 15px; background-color: #FFFFFF; border-radius: 5px;">
+                <strong style="color: #FF6B00;">🔍 Паттерны</strong>
+                <p style="color: #1A3A5A; margin: 5px 0 0 0; font-size: 0.9em;">Автоматическое извлечение паттернов поведения</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
