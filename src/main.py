@@ -1250,52 +1250,95 @@ def process_user(
         except Exception as e:
             print(f"Ошибка рекомендаций по правилам: {e}")
     
-    # Объединяем рекомендации
-    all_recommendations = []
+    # Объединяем рекомендации с нормализацией оценок
+    all_recommendations = {}
     
-    # Добавляем ML рекомендации
+    # Добавляем ML рекомендации (score уже нормализован 0-1)
     for rec in ml_recommendations:
         product = rec["product"]
-        score = rec["score"]
+        ml_score = float(rec["score"])  # ML: 0-1
         
-        # Генерируем объяснение (используем YandexGPT только если включен)
-        try:
-            reason = explain_recommendation(profile, product, use_yandexgpt=use_yandexgpt_for_analysis)
-        except Exception as e:
-            print(f"Ошибка генерации объяснения: {e}")
-            reason = f"Рекомендуется на основе вашего профиля"
-        
-        all_recommendations.append({
-            "product": product,
-            "score": score,
-            "source": "ML модель",
-            "reason": reason
-        })
-    
-    # Добавляем рекомендации по правилам
-    for rec in rule_recommendations[:top_k]:
-        product = rec["product"]
-        score = rec["score"]
-        
-        # Берем лучшее объяснение из правил
-        if rec["reasons"]:
-            reason = rec["reasons"][0]["reason"]
-        else:
+        if product not in all_recommendations:
+            # Генерируем объяснение (используем YandexGPT только если включен)
             try:
                 reason = explain_recommendation(profile, product, use_yandexgpt=use_yandexgpt_for_analysis)
-            except:
-                reason = f"Рекомендуется на основе паттернов поведения"
+            except Exception as e:
+                print(f"Ошибка генерации объяснения: {e}")
+                reason = f"Рекомендуется на основе вашего профиля"
+            
+            all_recommendations[product] = {
+                "product": product,
+                "ml_score": ml_score,
+                "rule_score": 0.0,
+                "source": "ML модель",
+                "reason": reason,
+                "sources": ["ML модель"]
+            }
+        else:
+            # Обновляем ML оценку если уже есть от правил
+            all_recommendations[product]["ml_score"] = ml_score
+            all_recommendations[product]["sources"].append("ML модель")
+    
+    # Добавляем рекомендации по правилам (нормализуем score 1-3 -> 0-1)
+    for rec in rule_recommendations[:top_k]:
+        product = rec["product"]
+        rule_score_raw = rec["score"]  # Правила: 1-3 (confidence)
         
-        all_recommendations.append({
+        # Нормализуем оценку правил: 1-3 -> 0-0.7 (чтобы ML модель была приоритетнее)
+        rule_score_normalized = (rule_score_raw - 1) / 2.0 * 0.7  # (1->0, 2->0.35, 3->0.7)
+        
+        if product not in all_recommendations:
+            # Берем лучшее объяснение из правил
+            if rec["reasons"]:
+                reason = rec["reasons"][0]["reason"]
+            else:
+                try:
+                    reason = explain_recommendation(profile, product, use_yandexgpt=use_yandexgpt_for_analysis)
+                except:
+                    reason = f"Рекомендуется на основе паттернов поведения"
+            
+            all_recommendations[product] = {
+                "product": product,
+                "ml_score": 0.0,
+                "rule_score": rule_score_normalized,
+                "source": "Правила",
+                "reason": reason,
+                "sources": ["Правила"]
+            }
+        else:
+            # Объединяем с ML рекомендацией
+            all_recommendations[product]["rule_score"] = rule_score_normalized
+            all_recommendations[product]["sources"].append("Правила")
+            # Если есть правило, предпочитаем его объяснение
+            if rec["reasons"]:
+                all_recommendations[product]["reason"] = rec["reasons"][0]["reason"]
+    
+    # Объединяем оценки: ML модель (0-1) + Правила (0-0.7) = общая оценка (0-1.7, но нормализуем до 1.0)
+    final_list = []
+    for product, rec_data in all_recommendations.items():
+        # Комбинированная оценка: 70% ML + 30% Правила
+        combined_score = rec_data["ml_score"] * 0.7 + rec_data["rule_score"] * 0.3
+        
+        # Определяем источник
+        if rec_data["ml_score"] > 0 and rec_data["rule_score"] > 0:
+            source = "ML модель + Правила"
+        elif rec_data["ml_score"] > 0:
+            source = "ML модель"
+        else:
+            source = "Правила"
+        
+        final_list.append({
             "product": product,
-            "score": score,
-            "source": "Правила",
-            "reason": reason
+            "score": combined_score,
+            "ml_score": rec_data["ml_score"],
+            "rule_score": rec_data["rule_score"],
+            "source": source,
+            "reason": rec_data["reason"]
         })
     
     # Сортируем и берем топ-K
-    all_recommendations.sort(key=lambda x: x["score"], reverse=True)
-    final_recommendations = all_recommendations[:top_k]
+    final_list.sort(key=lambda x: x["score"], reverse=True)
+    final_recommendations = final_list[:top_k]
     
     print(f"📊 Финальная статистика:")
     print(f"   - Брендов в маппинге названий: {len(brands_map)}")

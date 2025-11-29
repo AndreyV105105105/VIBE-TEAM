@@ -28,7 +28,14 @@ class NBOModel:
         
         :param model_path: Путь к сохраненной модели
         """
-        self.model_path = model_path or "models/nbo_model.pkl"
+        # Используем абсолютный путь для надежности
+        if model_path is None:
+            # Путь относительно текущей рабочей директории
+            # В Docker контейнере WORKDIR = /app, поэтому models/nbo_model.pkl -> /app/models/nbo_model.pkl
+            default_path = Path.cwd() / "models" / "nbo_model.pkl"
+            self.model_path = str(default_path)
+        else:
+            self.model_path = model_path
         self.model: Optional[RandomForestRegressor] = None
         self.scaler: Optional[StandardScaler] = None
         self.products: List[str] = []
@@ -232,15 +239,40 @@ class NBOModel:
     
     def save_model(self) -> None:
         """Сохраняет модель в файл."""
-        Path(self.model_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        data = {
-            "model": self.model,
-            "scaler": self.scaler,
-            "products": self.products
-        }
-        
-        joblib.dump(data, self.model_path)
+        try:
+            # Создаем абсолютный путь, чтобы гарантировать правильное сохранение
+            model_path = Path(self.model_path)
+            if not model_path.is_absolute():
+                # Если путь относительный, делаем его абсолютным от текущей рабочей директории
+                model_path = Path.cwd() / model_path
+            
+            # Создаем директорию, если её нет
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            data = {
+                "model": self.model,
+                "scaler": self.scaler,
+                "products": self.products
+            }
+            
+            # Сохраняем модель
+            joblib.dump(data, str(model_path))
+            
+            # Обновляем путь модели на абсолютный
+            self.model_path = str(model_path)
+            
+            # Проверяем, что файл действительно создан
+            if model_path.exists():
+                file_size = model_path.stat().st_size
+                print(f"✅ Модель успешно сохранена в: {self.model_path} (размер: {file_size / 1024:.2f} KB)")
+            else:
+                print(f"⚠️  Предупреждение: файл модели не найден после сохранения: {self.model_path}")
+                
+        except Exception as e:
+            print(f"❌ Ошибка при сохранении модели в {self.model_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def train(
         self,
@@ -266,9 +298,12 @@ class NBOModel:
         X_scaled = self.scaler.fit_transform(X)
         
         # Обучаем модель
+        print(f"🔄 Обучение модели на {len(X)} примерах...")
         self.model.fit(X_scaled, y_numeric)
+        print("✅ Модель обучена, начинаю сохранение...")
         
         # Сохраняем модель
+        print(f"💾 Сохранение модели в: {self.model_path}")
         self.save_model()
     
     def train_with_yandexgpt(
@@ -286,6 +321,7 @@ class NBOModel:
         :param use_synthetic: Использовать ли синтетические данные от YandexGPT
         """
         print("🤖 Предварительное обучение модели с YandexGPT...")
+        print(f"📁 Модель будет сохранена в: {Path(self.model_path).resolve()}")
         
         X_train = []
         y_train = []
@@ -1210,6 +1246,12 @@ class NBOModel:
             # Нормализуем, чтобы максимальная оценка была 1.0
             if final_scores[product] > 1.0:
                 final_scores[product] = 1.0
+        
+        # Нормализуем все оценки так, чтобы максимальная была 1.0
+        max_score = max(final_scores.values()) if final_scores else 1.0
+        if max_score > 0:
+            for product in final_scores:
+                final_scores[product] = final_scores[product] / max_score
         
         # Сортируем по оценке
         sorted_products = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
