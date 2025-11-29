@@ -49,7 +49,7 @@ data/
 *.parquet
 
 # Models (будут монтироваться как volume)
-models/
+src/app/models/
 *.pkl
 *.json
 

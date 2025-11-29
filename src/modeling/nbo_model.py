@@ -5,6 +5,7 @@
 """
 
 import joblib
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 from collections import defaultdict
@@ -39,6 +40,9 @@ class NBOModel:
             # Делаем путь абсолютным
             self.model_path = str(default_path.resolve())
             print(f"📁 Путь модели установлен: {self.model_path}")
+            print(f"   - Рабочая директория: {Path.cwd()}")
+            print(f"   - Директория models: {models_dir.resolve()}")
+            print(f"   - Директория models существует: {models_dir.exists()}")
         else:
             # Преобразуем в абсолютный путь
             self.model_path = str(Path(model_path).resolve())
@@ -262,8 +266,15 @@ class NBOModel:
             print(f"   - Текущая рабочая директория: {Path.cwd()}")
             
             # Создаем директорию, если её нет
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-            print(f"   - Директория создана/проверена: {model_path.parent}")
+            try:
+                model_path.parent.mkdir(parents=True, exist_ok=True)
+                print(f"   - Директория создана/проверена: {model_path.parent}")
+                # Проверяем права доступа
+                if not os.access(model_path.parent, os.W_OK):
+                    raise PermissionError(f"Нет прав на запись в директорию: {model_path.parent}")
+            except Exception as dir_err:
+                print(f"❌ Ошибка при создании/проверке директории: {dir_err}")
+                raise
             
             data = {
                 "model": self.model,
@@ -280,11 +291,26 @@ class NBOModel:
             self.model_path = str(model_path)
             
             # Проверяем, что файл действительно создан
+            import time
+            time.sleep(0.1)  # Небольшая задержка для гарантии записи на диск
+            
             if model_path.exists():
                 file_size = model_path.stat().st_size
                 print(f"✅ Модель успешно сохранена в: {self.model_path}")
                 print(f"   - Размер файла: {file_size / 1024:.2f} KB ({file_size} байт)")
                 print(f"   - Файл доступен для чтения: {model_path.is_file()}")
+                
+                # Проверяем путь на хосте (для Docker volume mount)
+                # Путь внутри контейнера: /app/models/nbo_model.pkl
+                # Путь на хосте: ./models/nbo_model.pkl (если volume mount работает)
+                host_models_path = Path("./models/nbo_model.pkl")
+                if host_models_path.exists():
+                    host_size = host_models_path.stat().st_size
+                    print(f"   - ✅ Модель также доступна на хосте: {host_models_path.resolve()}")
+                    print(f"   - Размер на хосте: {host_size / 1024:.2f} KB")
+                else:
+                    print(f"   - ⚠️  Модель не найдена на хосте в ./models/ (проверьте volume mount)")
+                    print(f"   - Volume mount должен быть: ./models:/app/models")
                 
                 # Дополнительная проверка - пробуем загрузить обратно
                 try:
@@ -299,7 +325,12 @@ class NBOModel:
                 print(f"⚠️  ОШИБКА: файл модели НЕ найден после сохранения!")
                 print(f"   - Ожидаемый путь: {self.model_path}")
                 print(f"   - Родительская директория: {model_path.parent}")
-                print(f"   - Содержимое родительской директории: {list(model_path.parent.iterdir()) if model_path.parent.exists() else 'не существует'}")
+                print(f"   - Родительская директория существует: {model_path.parent.exists()}")
+                if model_path.parent.exists():
+                    print(f"   - Содержимое родительской директории: {list(model_path.parent.iterdir())}")
+                    print(f"   - Права на запись: {os.access(model_path.parent, os.W_OK)}")
+                else:
+                    print(f"   - ⚠️  Родительская директория не существует!")
                 
         except Exception as e:
             print(f"❌ ОШИБКА при сохранении модели в {self.model_path}: {e}")
@@ -339,15 +370,32 @@ class NBOModel:
         print(f"💾 Сохранение модели в: {self.model_path}")
         print(f"📂 Абсолютный путь: {Path(self.model_path).resolve()}")
         print(f"📂 Текущая рабочая директория: {Path.cwd()}")
-        self.save_model()
         
-        # Дополнительная проверка после сохранения
-        saved_path = Path(self.model_path).resolve()
-        if saved_path.exists():
-            print(f"✅ ПОДТВЕРЖДЕНО: Модель существует по пути: {saved_path}")
-        else:
-            print(f"❌ ВНИМАНИЕ: Модель не найдена по пути: {saved_path}")
-            print(f"   Проверьте права доступа и наличие директории")
+        try:
+            self.save_model()
+            
+            # Дополнительная проверка после сохранения
+            saved_path = Path(self.model_path).resolve()
+            if saved_path.exists():
+                file_size = saved_path.stat().st_size
+                print(f"✅ ПОДТВЕРЖДЕНО: Модель существует по пути: {saved_path}")
+                print(f"   - Размер файла: {file_size / 1024:.2f} KB ({file_size} байт)")
+                
+                # Проверка на хосте (для Docker)
+                host_path = Path("./models/nbo_model.pkl")
+                if host_path.exists():
+                    print(f"   - ✅ Модель также доступна на хосте: {host_path.resolve()}")
+                else:
+                    print(f"   - ⚠️  Модель не видна на хосте в ./models/ (возможно, volume mount не работает)")
+            else:
+                print(f"❌ ВНИМАНИЕ: Модель не найдена по пути: {saved_path}")
+                print(f"   Проверьте права доступа и наличие директории")
+                
+        except Exception as save_error:
+            print(f"❌ КРИТИЧЕСКАЯ ОШИБКА при сохранении модели: {save_error}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def train_with_yandexgpt(
         self,
@@ -376,6 +424,7 @@ class NBOModel:
         
         for i, profile in enumerate(user_profiles[:50], 1):  # Ограничиваем для экономии токенов
             try:
+                # Преобразуем профиль в признаки (может упасть, если категории не преобразуются)
                 features = profile_to_features(profile)
                 X_train.append(features)
                 
@@ -388,7 +437,16 @@ class NBOModel:
                 if i < min(50, total_profiles):
                     time.sleep(0.5)
             except Exception as e:
-                print(f"⚠ Ошибка при обработке профиля: {e}")
+                print(f"⚠ Ошибка при обработке профиля {i}: {e}")
+                import traceback
+                # Показываем детальную информацию об ошибке для диагностики
+                error_details = traceback.format_exc()
+                if "could not convert string to float" in str(e):
+                    print(f"   🔍 Детали: Проблема с преобразованием категорий. Убедитесь, что используется исправленная версия profile_to_features()")
+                    print(f"   🔍 Категория в профиле: {profile.get('top_category', 'N/A')}")
+                    print(f"   🔍 Регион в профиле: {profile.get('region', 'N/A')}")
+                else:
+                    print(f"   🔍 Детали ошибки: {error_details.split(chr(10))[-3:-1] if len(error_details) > 10 else error_details}")
                 continue
         
         # Если включен синтетический режим, генерируем дополнительные данные
@@ -400,10 +458,31 @@ class NBOModel:
         
         if len(X_train) > 0:
             print(f"✅ Сгенерировано {len(X_train)} обучающих примеров")
-            self.train(X_train, y_train)
-            print("✅ Модель успешно обучена с помощью YandexGPT")
+            try:
+                self.train(X_train, y_train)
+                print("✅ Модель успешно обучена с помощью YandexGPT")
+            except Exception as e:
+                print(f"⚠ Ошибка при обучении модели: {e}")
+                import traceback
+                traceback.print_exc()
+                # Пробуем сохранить модель даже при ошибке обучения (хотя бы инициализированная)
+                print("💾 Попытка сохранения частично обученной модели...")
+                try:
+                    self.save_model()
+                except Exception as save_err:
+                    print(f"⚠ Ошибка при сохранении частично обученной модели: {save_err}")
+                raise
         else:
             print("⚠ Не удалось сгенерировать обучающие данные")
+            print("💡 Попытка сохранения инициализированной модели (без обучения)...")
+            try:
+                # Сохраняем хотя бы инициализированную модель
+                self.save_model()
+                print("✅ Инициализированная модель сохранена (можно будет обучить позже)")
+            except Exception as save_err:
+                print(f"⚠ Ошибка при сохранении инициализированной модели: {save_err}")
+                import traceback
+                traceback.print_exc()
     
     def _get_recommendation_from_yandexgpt(self, profile: Dict) -> str:
         """
@@ -497,14 +576,23 @@ class NBOModel:
                 ]
                 
                 for var_profile in variations:
-                    features = profile_to_features(var_profile)
-                    X_synthetic.append(features)
-                    
-                    # Получаем рекомендацию от YandexGPT
-                    product = self._get_recommendation_from_yandexgpt(var_profile)
-                    y_synthetic.append(product)
+                    try:
+                        features = profile_to_features(var_profile)
+                        X_synthetic.append(features)
+                        
+                        # Получаем рекомендацию от YandexGPT
+                        product = self._get_recommendation_from_yandexgpt(var_profile)
+                        y_synthetic.append(product)
+                    except Exception as e:
+                        print(f"⚠ Ошибка при обработке вариации профиля: {e}")
+                        if "could not convert string to float" in str(e):
+                            print(f"   🔍 Категория: {var_profile.get('top_category', 'N/A')}")
+                            print(f"   🔍 Регион: {var_profile.get('region', 'N/A')}")
+                        continue
             except Exception as e:
                 print(f"⚠ Ошибка при генерации синтетических данных: {e}")
+                import traceback
+                print(f"   Детали: {traceback.format_exc()}")
                 continue
         
         return {"X": X_synthetic, "y": y_synthetic}

@@ -62,15 +62,20 @@ def normalize_marketplace_events(df: pl.DataFrame, file_path: str = "") -> pl.Da
             # Если нет item_id, создаем фиктивный
             result = result.with_columns(pl.lit("unknown").alias("item_id"))
     
-    # Нормализуем category_id
-    if "category_id" not in result.columns:
-        for alt_name in ["category", "categoryId", "categoryid", "cat_id", "cat"]:
-            if alt_name in result.columns:
-                result = result.rename({alt_name: "category_id"})
-                break
-        else:
-            # Если нет category_id, создаем null
-            result = result.with_columns(pl.lit(None).alias("category_id"))
+    # Нормализуем категории - сохраняем и category (название) и category_id (ID), если есть
+    # В спецификации Yandex Cloud Data Set:
+    # - category: строка с названием категории (например, "Foodstuffs and Beverages")
+    # - category_id: ID категории (если есть)
+    # Не переименовываем category, а оставляем оба поля для сохранения названий
+    if "category" not in result.columns and "category_id" in result.columns:
+        # Если есть только category_id, можем использовать его как category тоже
+        # Но лучше оставить category_id отдельно
+        pass
+    elif "category_id" not in result.columns and "category" in result.columns:
+        # Если есть только category (название), оставляем его как есть
+        # category_id остается пустым
+        pass
+    # Если нет ни category, ни category_id - оставляем как есть (может быть null)
     
     # Нормализуем brand_id
     if "brand_id" not in result.columns:
@@ -129,8 +134,9 @@ def normalize_marketplace_events(df: pl.DataFrame, file_path: str = "") -> pl.Da
                 break
     
     # Выбираем только нужные колонки
-    expected_cols = ["user_id", "item_id", "category_id", "timestamp", "domain"]
-    optional_cols = ["region", "price", "brand_id", "action_type", "subdomain", "count", "os"]
+    # Включаем и category (название) и category_id (ID), если есть
+    expected_cols = ["user_id", "item_id", "timestamp", "domain"]
+    optional_cols = ["category", "category_id", "subcategory", "region", "price", "brand_id", "action_type", "subdomain", "count", "os"]
     
     available_cols = [col for col in expected_cols + optional_cols if col in result.columns]
     
@@ -323,13 +329,13 @@ def normalize_retail_events(df: pl.DataFrame, file_path: str = "") -> pl.DataFra
                 break
         # Если brand_id нет, не создаем фиктивный - оставляем как есть (может быть null)
     
-    # Нормализуем category_id
-    if "category_id" not in result.columns:
-        for alt_name in ["category", "categoryId", "categoryid", "cat_id", "cat"]:
-            if alt_name in result.columns:
-                result = result.rename({alt_name: "category_id"})
-                break
-        # Если category_id нет, не создаем - оставляем как есть
+    # Нормализуем категории - сохраняем и category (название) и category_id (ID), если есть
+    # В спецификации Yandex Cloud Data Set:
+    # - category: строка с названием категории (например, "Foodstuffs and Beverages")
+    # - category_id: ID категории (если есть)
+    # - subcategory: подкатегория (если есть)
+    # Не переименовываем category, а оставляем оба поля для сохранения названий
+    # Если category или category_id нет, не создаем - оставляем как есть
     
     # Нормализуем action_type
     if "action_type" not in result.columns:
@@ -390,8 +396,9 @@ def normalize_retail_events(df: pl.DataFrame, file_path: str = "") -> pl.DataFra
                 pass
     
     # Выбираем нужные колонки (сохраняем все важные поля из retail events)
+    # Включаем и category (название) и category_id (ID), если есть
     expected_cols = ["user_id", "timestamp", "domain"]
-    optional_cols = ["item_id", "brand_id", "category_id", "action_type", "subdomain", "price", "count", "os"]
+    optional_cols = ["item_id", "brand_id", "category", "category_id", "subcategory", "action_type", "subdomain", "price", "count", "os"]
     
     available_cols = [col for col in expected_cols + optional_cols if col in result.columns]
     

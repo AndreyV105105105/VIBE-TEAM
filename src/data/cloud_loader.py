@@ -889,9 +889,10 @@ class YandexDiskLoader:
         """
         try:
             # Используем projection pushdown - загружаем только нужные колонки
-            # ВАЖНО: brand_id может отсутствовать в некоторых файлах, поэтому он опционален
+            # ВАЖНО: используем только стандартные названия колонок из спецификации Yandex Cloud Data Set
+            # Без эвристик и альтернативных названий - только: item_id, brand_id, category, subcategory
             needed_cols = ["item_id"]  # item_id обязателен
-            optional_cols = ["brand_id", "category", "subcategory"]  # Эти колонки опциональны
+            optional_cols = ["brand_id", "category", "category_id", "subcategory"]  # Стандартные колонки из спецификации
             if include_embedding:
                 optional_cols.append("embedding")  # Добавляем embedding только если нужен
             
@@ -960,7 +961,7 @@ class YandexDiskLoader:
                 
                 # Собираем доступные колонки (обязательные + опциональные)
                 available_cols = ["item_id"]  # item_id всегда есть
-                optional_cols = ["brand_id", "category", "subcategory"]
+                optional_cols = ["brand_id", "category", "category_id", "subcategory"]
                 if include_embedding:
                     optional_cols.append("embedding")
                 for col in optional_cols:
@@ -1016,7 +1017,7 @@ class YandexDiskLoader:
         """
         try:
             # Используем projection pushdown - загружаем только нужные колонки
-            needed_cols = ["item_id", "brand_id", "category", "subcategory"]
+            needed_cols = ["item_id", "brand_id", "category", "category_id", "subcategory"]
             if include_embedding:
                 needed_cols.append("embedding")  # Добавляем embedding только если нужен
             
@@ -1079,7 +1080,7 @@ class YandexDiskLoader:
                 
                 # Собираем доступные колонки (обязательные + опциональные)
                 available_cols = ["item_id"]  # item_id всегда есть
-                optional_cols = ["brand_id", "category", "subcategory"]
+                optional_cols = ["brand_id", "category", "category_id", "subcategory"]
                 if include_embedding:
                     optional_cols.append("embedding")
                 for col in optional_cols:

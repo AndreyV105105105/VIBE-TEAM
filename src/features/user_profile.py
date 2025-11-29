@@ -54,276 +54,59 @@ def create_user_profile(
         print(f"   📊 Уникальных товаров: {profile['unique_items']}")
         print(f"   📊 Колонки в событиях: {list(combined_views.columns)}")
         
-        # Проверяем наличие категорий в событиях
-        has_category = "category" in combined_views.columns
-        has_category_id = "category_id" in combined_views.columns
-        print(f"   📊 category в событиях: {has_category}, category_id в событиях: {has_category_id}")
+        # Простое извлечение категорий - только из стандартных колонок category/category_id
+        # Без эвристик, маппингов и обогащений
+        category_col = None
+        if "category" in combined_views.columns:
+            category_col = "category"
+        elif "category_id" in combined_views.columns:
+            category_col = "category_id"
         
-        if has_category:
-            non_null_cats = combined_views.filter(pl.col("category").is_not_null()).height
-            print(f"   📊 Событий с category: {non_null_cats} из {combined_views.height}")
-        if has_category_id:
-            non_null_cat_ids = combined_views.filter(pl.col("category_id").is_not_null()).height
-            print(f"   📊 Событий с category_id: {non_null_cat_ids} из {combined_views.height}")
-        
-        # Простое извлечение категории - берем значение из колонки
-        def extract_category_value(row_data, category_cols):
-            """
-            Извлекает категорию из строки данных.
-            Берет первую доступную колонку с непустым значением.
-            """
-            for col in category_cols:
-                if col in row_data:
-                    value = row_data[col]
-                    if value is not None and value != "":
-                        return str(value).strip()
-            return None
-        
-        # Топ категория - улучшенное извлечение с обогащением из items
-        # Сначала пробуем обогатить события категориями из items (даже если категории есть, но null)
-        item_to_category_map = {}
-        if items_with_embeddings and combined_views.height > 0 and "item_id" in combined_views.columns:
-            print(f"   🔍 items_with_embeddings доступен: {len(items_with_embeddings)} каталогов")
-            print(f"   🔍 Попытка извлечения категорий из {len(items_with_embeddings)} каталогов items...")
-            try:
-                # Собираем категории из всех каталогов items
-                for catalog_name, items_df in items_with_embeddings.items():
-                    if items_df.height > 0 and "item_id" in items_df.columns:
-                        # Ищем стандартные колонки категорий
-                        category_cols = []
-                        for col in ["category", "category_id"]:
-                            if col in items_df.columns:
-                                category_cols.append(col)
-                        
-                        if category_cols:
-                            print(f"   📦 Найдены колонки категорий в {catalog_name}: {category_cols}")
-                            
-                            # Создаем маппинг item_id -> категория
-                            # Нормализуем item_id к строке для надежного маппинга
-                            for row in items_df.iter_rows(named=True):
-                                item_id_raw = row.get("item_id")
-                                if item_id_raw is not None:
-                                    # Нормализуем item_id: убираем .0 если это float, приводим к строке
-                                    item_id = str(item_id_raw).replace(".0", "").strip()
-                                    if item_id and item_id.lower() not in ["none", "null", "nan", ""]:
-                                        category = extract_category_value(row, category_cols)
-                                        if category:
-                                            item_to_category_map[item_id] = category
-                        else:
-                            print(f"   ⚠ В {catalog_name} не найдено колонок категорий. Доступные колонки: {list(items_df.columns)}")
+        if category_col:
+            print(f"   📊 Используется колонка категорий: {category_col}")
+            non_null_count = combined_views.filter(pl.col(category_col).is_not_null()).height
+            print(f"   📊 Событий с категориями: {non_null_count} из {combined_views.height}")
+            
+            # Фильтруем валидные категории
+            valid_categories = combined_views.filter(
+                pl.col(category_col).is_not_null() & 
+                (pl.col(category_col) != "") & 
+                (pl.col(category_col).cast(pl.Utf8) != "nan")
+            )
+            
+            if valid_categories.height > 0:
+                # Подсчитываем частоту категорий
+                category_counts = valid_categories[category_col].value_counts().sort("count", descending=True)
+                all_categories_list = category_counts[category_col].to_list()
                 
-                if item_to_category_map:
-                    print(f"   ✅ Создан маппинг категорий для {len(item_to_category_map)} товаров")
-                    # Показываем примеры категорий
-                    sample_categories = list(item_to_category_map.values())[:5]
-                    print(f"   📋 Примеры категорий: {sample_categories}")
-                else:
-                    print(f"   ⚠ Не найдено категорий в каталогах items")
-            except Exception as e:
-                print(f"⚠ Ошибка при создании маппинга категорий из items: {e}")
-                import traceback
-                print(f"   Детали: {traceback.format_exc()}")
-        
-        # Обогащаем события категориями из items (если категорий нет или они null)
-        if item_to_category_map and "item_id" in combined_views.columns:
-            try:
-                # Нормализуем item_id в событиях для маппинга
-                # Приводим к строке и убираем .0 если есть
-                def normalize_item_id_for_mapping(item_id):
-                    if item_id is None:
-                        return None
-                    normalized = str(item_id).replace(".0", "").strip()
-                    if normalized and normalized.lower() not in ["none", "null", "nan", ""]:
-                        return normalized
-                    return None
+                # Топ категория - самая частая
+                profile["top_category"] = all_categories_list[0] if all_categories_list else None
+                profile["all_categories"] = all_categories_list
+                profile["category_counts"] = dict(zip(
+                    category_counts[category_col].to_list(),
+                    category_counts["count"].to_list()
+                ))
                 
-                # Добавляем категории из items к событиям
-                enriched_views = combined_views
-                category_from_items = pl.Series([
-                    item_to_category_map.get(normalize_item_id_for_mapping(item_id), None)
-                    for item_id in combined_views["item_id"].to_list()
-                ])
-                
-                enriched_views = enriched_views.with_columns(category_from_items.alias("category_from_items"))
-                
-                # Проверяем, сколько категорий удалось добавить
-                matched_count = sum(1 for cat in category_from_items if cat is not None)
-                print(f"   📊 Маппинг категорий: {matched_count} из {len(category_from_items)} событий получили категорию из items")
-                
-                # Диагностика: проверяем типы item_id
-                if matched_count == 0 and combined_views.height > 0:
-                    sample_item_ids_events = [str(id) for id in combined_views["item_id"].head(5).to_list()]
-                    sample_item_ids_map = list(item_to_category_map.keys())[:5]
-                    print(f"   🔍 Диагностика маппинга:")
-                    print(f"      Примеры item_id в событиях: {sample_item_ids_events}")
-                    print(f"      Примеры item_id в маппинге: {sample_item_ids_map}")
-                    # Проверяем совпадения
-                    normalized_events = [str(id).replace(".0", "").strip() for id in combined_views["item_id"].head(10).to_list()]
-                    matches = [id for id in normalized_events if id in item_to_category_map]
-                    print(f"      Совпадений: {len(matches)} из {len(normalized_events)} проверенных")
-                
-                # Используем category_from_items если оригинальная категория null
-                category_col = "category" if "category" in enriched_views.columns else "category_id"
-                if category_col in enriched_views.columns:
-                    enriched_views = enriched_views.with_columns(
-                        pl.when(pl.col("category_from_items").is_not_null())
-                        .then(pl.col("category_from_items"))
-                        .otherwise(pl.col(category_col))
-                        .alias("final_category")
-                    )
-                else:
-                    enriched_views = enriched_views.with_columns(
-                        pl.col("category_from_items").alias("final_category")
-                    )
-                
-                # Извлекаем топ категорию и список всех категорий из обогащенных данных
-                valid_categories = enriched_views.filter(
-                    pl.col("final_category").is_not_null() & 
-                    (pl.col("final_category") != "") & 
-                    (pl.col("final_category").cast(pl.Utf8) != "nan")
-                )
-                if valid_categories.height > 0:
-                    # Список всех уникальных категорий с частотой (используем value_counts вместо mode)
-                    category_counts = valid_categories["final_category"].value_counts().sort("count", descending=True)
-                    all_categories = category_counts["final_category"].to_list()
-                    
-                    # Топ категория - самая частая (первая в отсортированном списке)
-                    profile["top_category"] = all_categories[0] if all_categories else None
-                    profile["all_categories"] = all_categories  # Список всех категорий
-                    profile["category_counts"] = dict(zip(
-                        category_counts["final_category"].to_list(),
-                        category_counts["count"].to_list()
-                    ))  # Словарь категория -> частота
-                    
-                    if profile["top_category"]:
-                        top_count = profile["category_counts"].get(profile["top_category"], 0)
-                        print(f"✅ Извлечена top_category: {profile['top_category']} ({top_count} раз(а)) из {valid_categories.height} событий с категориями")
-                        print(f"   📋 Всего уникальных категорий: {len(all_categories)}")
-                        if len(all_categories) > 1:
-                            top3_str = ", ".join([f"{cat} ({profile['category_counts'].get(cat, 0)} раз)" for cat in all_categories[:3]])
-                            print(f"   📊 Топ-3 категории: {top3_str}")
-                    else:
-                        print(f"⚠ Не удалось определить top_category из {valid_categories.height} событий")
-                else:
-                    profile["top_category"] = None
-                    profile["all_categories"] = []
-                    profile["category_counts"] = {}
-                    print(f"⚠ Не найдено событий с валидными категориями после обогащения")
-            except Exception as e:
-                print(f"⚠ Ошибка при обогащении событий категориями: {e}")
-                # Fallback на стандартное извлечение
-                category_col = "category" if "category" in combined_views.columns else "category_id"
-                if category_col in combined_views.columns:
-                    valid_categories = combined_views.filter(
-                        pl.col(category_col).is_not_null() & 
-                        (pl.col(category_col) != "") & 
-                        (pl.col(category_col).cast(pl.Utf8) != "nan")
-                    )
-                    if valid_categories.height > 0:
-                        # Список всех категорий с частотой
-                        category_counts = valid_categories[category_col].value_counts().sort("count", descending=True)
-                        all_categories_list = category_counts[category_col].to_list()
-                        
-                        # Топ категория - самая частая
-                        profile["top_category"] = all_categories_list[0] if all_categories_list else None
-                        profile["all_categories"] = all_categories_list
-                        profile["category_counts"] = dict(zip(
-                            category_counts[category_col].to_list(),
-                            category_counts["count"].to_list()
-                        ))
-                        
-                        if profile["top_category"]:
-                            top_count = profile["category_counts"].get(profile["top_category"], 0)
-                            print(f"✅ Извлечена top_category (fallback): {profile['top_category']} ({top_count} раз(а))")
-                    else:
-                        profile["top_category"] = None
-                        profile["all_categories"] = []
-                        profile["category_counts"] = {}
-                        print(f"⚠ Не найдено валидных категорий в колонке {category_col}")
-                else:
-                    profile["top_category"] = None
-                    profile["all_categories"] = []
-                    profile["category_counts"] = {}
-                    print(f"⚠ Колонка {category_col} отсутствует в событиях")
-        else:
-            # Стандартное извлечение категорий из событий
-            category_col = "category" if "category" in combined_views.columns else "category_id"
-            if category_col in combined_views.columns:
-                valid_categories = combined_views.filter(
-                    pl.col(category_col).is_not_null() & 
-                    (pl.col(category_col) != "") & 
-                    (pl.col(category_col).cast(pl.Utf8) != "nan")
-                )
-                if valid_categories.height > 0:
-                    # Список всех категорий с частотой
-                    category_counts = valid_categories[category_col].value_counts().sort("count", descending=True)
-                    all_categories_list = category_counts[category_col].to_list()
-                    
-                    # Топ категория - самая частая
-                    profile["top_category"] = all_categories_list[0] if all_categories_list else None
-                    profile["all_categories"] = all_categories_list
-                    profile["category_counts"] = dict(zip(
-                        category_counts[category_col].to_list(),
-                        category_counts["count"].to_list()
-                    ))
-                    
-                    if profile["top_category"]:
-                        top_count = profile["category_counts"].get(profile["top_category"], 0)
-                        print(f"✅ Извлечена top_category (стандартный метод): {profile['top_category']} ({top_count} раз(а))")
-                        print(f"   📋 Всего уникальных категорий: {len(all_categories_list)}")
-                else:
-                    profile["top_category"] = None
-                    profile["all_categories"] = []
-                    profile["category_counts"] = {}
-                    print(f"⚠ Не найдено валидных категорий в колонке {category_col} (стандартный метод)")
+                if profile["top_category"]:
+                    top_count = profile["category_counts"].get(profile["top_category"], 0)
+                    print(f"✅ Извлечена top_category: '{profile['top_category']}' ({top_count} раз(а))")
+                    print(f"   📋 Всего уникальных категорий: {len(all_categories_list)}")
+                    # Показываем примеры названий категорий для проверки
+                    sample_categories = all_categories_list[:5]
+                    print(f"   📝 Примеры названий категорий: {sample_categories}")
+                    if len(all_categories_list) > 1:
+                        top3_str = ", ".join([f"'{cat}' ({profile['category_counts'].get(cat, 0)} раз)" for cat in all_categories_list[:3]])
+                        print(f"   📊 Топ-3 категории: {top3_str}")
             else:
                 profile["top_category"] = None
-                print(f"⚠ Колонки category и category_id отсутствуют в событиях")
-        
-        # Если категория все еще не найдена, пробуем извлечь напрямую из items (fallback)
-        if not profile.get("top_category") and item_to_category_map and combined_views.height > 0 and "item_id" in combined_views.columns:
-            try:
-                # Нормализуем item_id для маппинга
-                def normalize_item_id(item_id):
-                    if item_id is None:
-                        return None
-                    normalized = str(item_id).replace(".0", "").strip()
-                    if normalized and normalized.lower() not in ["none", "null", "nan", ""]:
-                        return normalized
-                    return None
-                
-                user_item_ids = combined_views["item_id"].unique().to_list()
-                user_categories = []
-                matched_ids = []
-                for item_id in user_item_ids:
-                    normalized_id = normalize_item_id(item_id)
-                    if normalized_id and normalized_id in item_to_category_map:
-                        category = item_to_category_map[normalized_id]
-                        if category:
-                            user_categories.append(category)
-                            matched_ids.append(normalized_id)
-                
-                if user_categories:
-                    from collections import Counter
-                    top_category_counter = Counter(user_categories)
-                    most_common = top_category_counter.most_common(1)
-                    if most_common:
-                        profile["top_category"] = most_common[0][0]
-                        print(f"✅ Обогащена top_category из items (fallback): {profile['top_category']} (из {len(matched_ids)} товаров)")
-                else:
-                    print(f"⚠ Не удалось найти категории для item_id пользователя. Попробовано {len(user_item_ids)} item_id, совпадений в маппинге: 0")
-                    if len(user_item_ids) > 0:
-                        sample_ids = [normalize_item_id(uid) for uid in user_item_ids[:5]]
-                        sample_in_map = [mid for mid in sample_ids if mid and mid in item_to_category_map]
-                        print(f"   Примеры item_id пользователя: {sample_ids}")
-                        print(f"   Совпадений в маппинге: {len(sample_in_map)} из {len(sample_ids)}")
-                        if item_to_category_map:
-                            sample_map_keys = list(item_to_category_map.keys())[:5]
-                            print(f"   Примеры item_id в маппинге: {sample_map_keys}")
-            except Exception as e:
-                print(f"⚠ Ошибка при обогащении категорий из items (fallback): {e}")
-                import traceback
-                print(f"   Детали: {traceback.format_exc()}")
+                profile["all_categories"] = []
+                profile["category_counts"] = {}
+                print(f"⚠ Не найдено валидных категорий в колонке {category_col}")
+        else:
+            profile["top_category"] = None
+            profile["all_categories"] = []
+            profile["category_counts"] = {}
+            print(f"⚠ Колонки category и category_id отсутствуют в событиях")
         
         # Регион (если есть)
         if "region" in combined_views.columns:
@@ -1154,14 +937,23 @@ def profile_to_features(profile: Dict) -> List[float]:
     for feat in pattern_features:
         features.append(float(profile.get(feat, 0)))
     
-    # Категориальные (one-hot encoding через индексы)
-    if profile.get("top_category"):
-        features.append(float(profile["top_category"]))
+    # Категориальные признаки - преобразуем строки в числовые коды
+    # Используем хеш для преобразования строковых категорий в числа
+    # Это дает стабильное числовое представление для ML модели
+    top_category = profile.get("top_category")
+    if top_category and isinstance(top_category, str):
+        # Преобразуем строку категории в число через хеш
+        # Используем абсолютное значение и делим на большое число для нормализации
+        category_hash = abs(hash(top_category)) % 10000  # Ограничиваем диапазон 0-9999
+        features.append(float(category_hash))
     else:
         features.append(0.0)
     
-    if profile.get("region"):
-        features.append(float(profile["region"]))
+    region = profile.get("region")
+    if region and isinstance(region, str):
+        # Преобразуем строку региона в число через хеш
+        region_hash = abs(hash(region)) % 10000  # Ограничиваем диапазон 0-9999
+        features.append(float(region_hash))
     else:
         features.append(0.0)
     

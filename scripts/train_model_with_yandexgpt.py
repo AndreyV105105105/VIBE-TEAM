@@ -113,6 +113,18 @@ def main():
     # Создаем и обучаем модель
     model = NBOModel()
     
+    # Выводим путь модели для диагностики
+    print(f"\n📁 Информация о пути модели:")
+    print(f"   - Путь модели: {model.model_path}")
+    from pathlib import Path
+    import os
+    model_path_obj = Path(model.model_path)
+    print(f"   - Абсолютный путь: {model_path_obj.resolve()}")
+    print(f"   - Директория: {model_path_obj.parent}")
+    print(f"   - Директория существует: {model_path_obj.parent.exists()}")
+    if model_path_obj.parent.exists():
+        print(f"   - Права на запись: {os.access(model_path_obj.parent, os.W_OK)}")
+    
     print(f"\n🤖 Обучение модели с помощью YandexGPT на {len(profiles)} профилях...")
     print("⏳ Это может занять несколько минут из-за вызовов YandexGPT API...")
     
