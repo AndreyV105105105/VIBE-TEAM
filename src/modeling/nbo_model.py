@@ -619,7 +619,7 @@ class NBOModel:
         
         # Проверяем, обучена ли модель (есть ли атрибут n_estimators_ после fit)
         if not hasattr(self.model, 'estimators_') or len(self.model.estimators_) == 0:
-            print("⚠ Модель не обучена, используем улучшенный fallback с анализом графа и паттернов")
+            # Используем fallback без упоминания YandexGPT (модель не обучена)
             return self._fallback_recommendations(user_profile, top_k, graph, patterns)
         
         try:
@@ -640,30 +640,11 @@ class NBOModel:
                 # Scaler не обучен, используем без масштабирования
                 X_scaled = X
             
-            # Предсказываем для каждого продукта
-            scores = []
-            for i, product in enumerate(self.products):
-                # Создаем бинарную метку для каждого продукта
-                y_binary = np.zeros(len(self.products))
-                y_binary[i] = 1
-                
-                # Предсказываем вероятность
-                score = self.model.predict(X_scaled)[0]
-                scores.append((product, float(score)))
-            
-            # Сортируем по оценке
-            scores.sort(key=lambda x: x[1], reverse=True)
-            
-            # Возвращаем топ-K
-            recommendations = [
-                {
-                    "product": product,
-                    "score": score
-                }
-                for product, score in scores[:top_k]
-            ]
-            
-            return recommendations
+            # ВАЖНО: RandomForestRegressor предсказывает одно значение для всех продуктов
+            # Это неправильно - модель должна быть обучена для каждого продукта отдельно
+            # Поэтому всегда используем fallback для разнообразия рекомендаций
+            print(f"⚠ Модель обучена, но предсказания могут быть некорректными (одинаковый score для всех продуктов). Используем fallback для разнообразия.")
+            return self._fallback_recommendations(user_profile, top_k, graph, patterns)
         except Exception as e:
             print(f"⚠ Ошибка при предсказании модели: {e}, используем улучшенный fallback")
             return self._fallback_recommendations(user_profile, top_k, graph, patterns)
@@ -807,20 +788,23 @@ class NBOModel:
                         
                         # Если доминируют товары - активный просмотр/исследование
                         elif total_item_importance > total_brand_importance * 2:
-                            graph_scores["Семейная ипотека"] = 0.3
-                            graph_scores["Кредит на любые цели"] = 0.25  # Исправлено название
+                            # Больше разнообразия - не только ипотека
+                            graph_scores["Кредит на любые цели"] = 0.3
+                            graph_scores["Кредитная карта «100+»"] = 0.25
+                            graph_scores["Вклад «Сильная ставка»"] = 0.2
+                            # Ипотека только при явных сигналах категорий
                             if len(item_nodes) > 10:
-                                graph_scores["Семейная ипотека"] = 0.4  # Много просмотров = крупная покупка
+                                graph_scores["Кредит на любые цели"] = 0.4  # Много просмотров = разные покупки
                         
                         # Анализ категорий (если есть информация) - оптимизировано с использованием констант
                         if category_weights:
                             top_categories = sorted(category_weights.items(), key=lambda x: x[1], reverse=True)[:3]
-                            # Категории недвижимости/ремонта указывают на ипотеку
+                            # Категории недвижимости/ремонта указывают на ипотеку (только явные)
                             real_estate_keywords = CATEGORY_KEYWORDS["real_estate"][:4]
                             for cat_id, weight in top_categories:
                                 cat_str = str(cat_id).lower()
                                 if any(keyword in cat_str for keyword in real_estate_keywords):
-                                    graph_scores["Семейная ипотека"] += 0.2 * weight
+                                    graph_scores["Семейная ипотека"] += 0.3 * weight  # Усиливаем только для явных
                                     break
                     except Exception as e:
                         print(f"⚠ Ошибка PageRank анализа: {e}")
@@ -847,12 +831,13 @@ class NBOModel:
                                     
                                     # Длинные пути = сложное поведение = крупные покупки
                                     if avg_path_length > 4 or max_path_length > 5:
-                                        graph_scores["Семейная ипотека"] += 0.25
-                                        graph_scores["Кредит на любые цели"] += 0.2  # Исправлено название
+                                        graph_scores["Кредит на любые цели"] += 0.3  # Приоритет кредиту
+                                        graph_scores["ПСБ Инвестиции"] += 0.2
                                     
-                                    # Много путей = активное исследование
+                                    # Много путей = активное исследование разных вариантов
                                     if len(path_lengths) > 15:
-                                        graph_scores["Семейная ипотека"] += 0.15
+                                        graph_scores["Кредит на любые цели"] += 0.2
+                                        graph_scores["Кредитная карта «100+»"] += 0.15
                     except Exception as e:
                         print(f"⚠ Ошибка анализа путей: {e}")
                     
@@ -867,8 +852,8 @@ class NBOModel:
                         
                         # Низкая плотность, но много узлов = исследование разных вариантов
                         elif density < 0.2 and graph.number_of_nodes() > 10:
-                            graph_scores["Семейная ипотека"] += 0.2
-                            graph_scores["Кредит на любые цели"] += 0.15  # Исправлено название
+                            graph_scores["Кредит на любые цели"] += 0.25  # Приоритет кредиту
+                            graph_scores["Кредитная карта «100+»"] += 0.2
                         
                         # Анализ степени узлов (средняя степень)
                         degrees = dict(graph.degree())
@@ -929,32 +914,32 @@ class NBOModel:
                 
                 # Доминирование просмотров
                 elif view_ratio > 0.6:
-                    pattern_scores["Семейная ипотека"] = 0.35
-                    pattern_scores["Кредит на любые цели"] = 0.25  # Исправлено название
+                    pattern_scores["Кредит на любые цели"] = 0.35  # Приоритет кредиту
+                    pattern_scores["Кредитная карта «100+»"] = 0.25
                     if view_count > 10:
-                        pattern_scores["Семейная ипотека"] = 0.45  # Много просмотров = исследование
+                        pattern_scores["Кредит на любые цели"] = 0.45  # Много просмотров = разные покупки
                 
                 # Сбалансированное поведение
                 elif 0.3 < view_ratio < 0.6 and 0.2 < pay_ratio < 0.5:
-                    pattern_scores["Кредитная карта «100+»"] = 0.3
-                    pattern_scores["Семейная ипотека"] = 0.25
+                    pattern_scores["Кредитная карта «100+»"] = 0.35
+                    pattern_scores["Вклад «Сильная ставка»"] = 0.25
             
             # 2. Анализ последовательностей (сложные паттерны) - оптимизировано
             for pattern_str in pattern_strings:
                 # Паттерны исследования: V→V→V или V→V→P
                 if "V→V→V" in pattern_str or pattern_str.count("V") >= 3:
-                    pattern_scores["Семейная ипотека"] += 0.15
-                    pattern_scores["Кредит на любые цели"] += 0.1  # Исправлено название
+                    pattern_scores["Кредит на любые цели"] += 0.2  # Приоритет кредиту
+                    pattern_scores["Кредитная карта «100+»"] += 0.15
                 
                 # Паттерны активных покупок: P→P→P или P→P→V
                 if "P→P→P" in pattern_str or (pattern_str.count("P") >= 3 and pay_ratio > 0.5):
-                    pattern_scores["Кредитная карта «100+»"] += 0.2
-                    pattern_scores["Вклад «Сильная ставка»"] += 0.15
+                    pattern_scores["Кредитная карта «100+»"] += 0.25
+                    pattern_scores["Вклад «Сильная ставка»"] += 0.2
                 
                 # Сложные паттерны принятия решений: V→P→V или P→V→P
                 if "V→P→V" in pattern_str or "P→V→P" in pattern_str:
-                    pattern_scores["Семейная ипотека"] += 0.2
-                    pattern_scores["Кредит на любые цели"] += 0.15  # Исправлено название
+                    pattern_scores["Кредит на любые цели"] += 0.25  # Приоритет кредиту
+                    pattern_scores["Кредитная карта «100+»"] += 0.2
                 
                 # Паттерны быстрых решений: V→P (короткие паттерны)
                 if len(pattern_str.split("→")) <= 3 and "V" in pattern_str and "P" in pattern_str:
@@ -964,62 +949,122 @@ class NBOModel:
             # 3. Анализ разнообразия паттернов
             unique_patterns = len(set(pattern_strings))
             if unique_patterns > 5:
-                # Много разных паттернов = сложное поведение = крупные покупки
-                pattern_scores["Семейная ипотека"] += 0.1
-                pattern_scores["Кредит на любые цели"] += 0.1  # Исправлено название
+                # Много разных паттернов = сложное поведение = разные покупки
+                pattern_scores["Кредит на любые цели"] += 0.15  # Приоритет кредиту
+                pattern_scores["Кредитная карта «100+»"] += 0.1
         
         # Базовые оценки на основе профиля с улучшенными правилами
         base_scores = {}
         
         # Ипотека - улучшенная логика на основе комбинаций признаков
+        # ВАЖНО: Ипотека предлагается ТОЛЬКО при явных сигналах, чтобы обеспечить разнообразие
         mortgage_score = 0.0
         
-        # Сильные сигналы для ипотеки
-        # 1. Комбинация: крупные платежи + активное исследование
-        if high_value_customer > 0.4 and research_behavior > 0.5:
-            mortgage_score += 0.35
+        # ВАЖНО: Если категории не найдены (top_category = None или "retail" эвристика), НЕ предлагаем ипотеку
+        # Проверяем, что категория реальная, а не эвристическая
+        has_real_category = top_category and top_category not in ["retail", "marketplace", "payments"]
         
-        # 1.1. Retail заказы в категориях недвижимости/ремонта - оптимизировано
-        if num_retail_orders > 0 and check_category(top_category, CATEGORY_KEYWORDS["real_estate"][:4]):
-            mortgage_score += 0.25
+        # КРИТИЧНО: Проверяем, что категория НЕ относится к еде/напиткам/розничной торговле
+        # Эти категории НЕ должны давать ипотеку!
+        is_food_category = False
+        is_retail_category = False
         
-        # 2. Категории недвижимости/ремонта (сильный сигнал) - оптимизировано
+        # Прямая проверка категории (включая "Foodstuffs and Beverages") - ПРИОРИТЕТНАЯ
+        if top_category:
+            top_category_str = str(top_category)
+            top_category_lower = top_category_str.lower()
+            # Прямое сравнение с известными категориями еды (включая "Foodstuffs and Beverages")
+            food_keywords = ["foodstuffs", "beverages", "beverage", "foodstuff", "еда", "продукты", "напитки", "продукты питания"]
+            if any(kw in top_category_lower for kw in food_keywords):
+                is_food_category = True
+        
+        if top_brand_category and not is_food_category:
+            top_brand_category_str = str(top_brand_category)
+            top_brand_category_lower = top_brand_category_str.lower()
+            food_keywords = ["foodstuffs", "beverages", "beverage", "foodstuff", "еда", "продукты", "напитки", "продукты питания"]
+            if any(kw in top_brand_category_lower for kw in food_keywords):
+                is_food_category = True
+        
+        # Дополнительная проверка через check_category
+        if has_real_category and not is_food_category:
+            is_food_category = check_category(top_category, CATEGORY_KEYWORDS.get("food", []))
+            is_retail_category = check_category(top_category, CATEGORY_KEYWORDS.get("retail", []))
+            if top_brand_category and not is_food_category:
+                is_food_category = is_food_category or check_category(top_brand_category, CATEGORY_KEYWORDS.get("food", []))
+                is_retail_category = is_retail_category or check_category(top_brand_category, CATEGORY_KEYWORDS.get("retail", []))
+        
+        # ФИНАЛЬНАЯ ПРОВЕРКА: Если категория еды - ВСЕ ипотеки = 0
+        if is_food_category:
+        
+        # Сильные сигналы для ипотеки (только явные признаки недвижимости)
+        # 1. Явные категории недвижимости/ремонта (самый сильный сигнал)
         real_estate_signal = 0.0
-        if check_category(top_category, CATEGORY_KEYWORDS["real_estate"][:5]):
-            real_estate_signal += 0.3
+        if has_real_category and not is_food_category and not is_retail_category:
+            if check_category(top_category, CATEGORY_KEYWORDS["real_estate"][:5]):
+                real_estate_signal += 0.5  # Усиливаем для явных категорий
         
-        if check_category(top_brand_category, CATEGORY_KEYWORDS["real_estate"]):
-            real_estate_signal += 0.35
+        if top_brand_category and not is_food_category and not is_retail_category:
+            if check_category(top_brand_category, CATEGORY_KEYWORDS["real_estate"]):
+                real_estate_signal += 0.4
         
         real_estate_count = count_category_matches(brand_categories, CATEGORY_KEYWORDS["real_estate"][:3])
-        if real_estate_count > 0:
-            real_estate_signal += 0.2 * min(real_estate_count / 3.0, 1.0)
+        if real_estate_count > 0 and not is_food_category and not is_retail_category:
+            real_estate_signal += 0.3 * min(real_estate_count / 2.0, 1.0)
         
-        mortgage_score += min(real_estate_signal, 0.4)  # Ограничиваем вклад категорий
+        # КРИТИЧНО: Если категория еды/напитков - mortgage_score = 0 ДО любых расчетов
+        if is_food_category:
+            mortgage_score = 0.0
+        # Ипотека ТОЛЬКО если есть явные сигналы недвижимости И реальные категории И НЕ еда/розница
+        elif real_estate_signal > 0.3 and has_real_category and not is_retail_category:
+            mortgage_score = min(real_estate_signal, 0.7)  # Ограничиваем максимум
+        else:
+            # Если нет реальных категорий, явных сигналов или категория розницы - ипотека = 0
+            mortgage_score = 0.0
         
-        # 3. Долгосрочная активность + разнообразие = планирование крупной покупки
-        if engagement_duration > 0.5 and diversity_score > 0.4:
-            mortgage_score += 0.25
+        # 2. Retail заказы в категориях недвижимости/ремонта (только с реальными категориями И НЕ еда/розница)
+        if not is_food_category and num_retail_orders > 0 and has_real_category and not is_retail_category:
+            if check_category(top_category, CATEGORY_KEYWORDS["real_estate"][:4]):
+                mortgage_score = max(mortgage_score, 0.4)
         
-        # 4. Крупные платежи указывают на способность к крупным покупкам
-        if max_tx_normalized > 0.3:
-            mortgage_score += 0.2 * max_tx_normalized
+        # 3. Комбинация: крупные платежи + категории недвижимости (только с реальными категориями И НЕ еда/розница)
+        if not is_food_category and real_estate_signal > 0.2 and high_value_customer > 0.5 and has_real_category and not is_retail_category:
+            mortgage_score = min(mortgage_score + 0.15, 0.7)
         
-        # 5. Много просмотров разных товаров = исследование вариантов
-        if activity_intensity > 0.6 and diversity_score > 0.5:
-            mortgage_score += 0.15
+        # ФИНАЛЬНАЯ ПРОВЕРКА: Если категория еды - mortgage_score = 0
+        if is_food_category:
+            mortgage_score = 0.0
         
         # Вспомогательная функция для безопасного расчета score
         def safe_score(base_value, min_value=0.05, multiplier=1.0):
             """Безопасный расчет score с минимальным значением."""
             return min(max(base_value * multiplier, 0), 1.0) if base_value > 0 else min_value
         
-        base_scores["Семейная ипотека"] = safe_score(mortgage_score)
-
-        # Расширенная линейка ипотечных продуктов - оптимизировано (групповая обработка)
-        standard_mortgages = ["Ипотека «Вторичное жилье»", "Ипотека «Новостройка»"]
-        for product in standard_mortgages:
-            base_scores[product] = safe_score(mortgage_score)
+        # Ипотека только если есть явные сигналы И реальные категории И НЕ еда/розница
+        # КРИТИЧНО: Если категория еды - ВСЕ ипотеки = 0 (даже если mortgage_score > 0)
+        if is_food_category:
+            # Прямой запрет ВСЕХ ипотек при категории еды
+            base_scores["Семейная ипотека"] = 0.0
+            base_scores["Ипотека «Вторичное жилье»"] = 0.0
+            base_scores["Ипотека «Новостройка»"] = 0.0
+            base_scores["Госпрограмма «Новые субъекты»"] = 0.0
+            base_scores["Дальневосточная и арктическая ипотека"] = 0.0
+            base_scores["Семейная военная ипотека"] = 0.0
+            base_scores["Военная ипотека"] = 0.0
+            base_scores["Военная ипотека «Новые субъекты»"] = 0.0
+            base_scores["Военная ипотека (Рефинансирование)"] = 0.0
+            base_scores["Кредит под залог квартиры"] = 0.0
+            base_scores["Рефинансирование ипотеки"] = 0.0
+        elif mortgage_score > 0.2 and has_real_category and not is_retail_category:
+            base_scores["Семейная ипотека"] = safe_score(mortgage_score)
+            # Расширенная линейка ипотечных продуктов
+            standard_mortgages = ["Ипотека «Вторичное жилье»", "Ипотека «Новостройка»"]
+            for product in standard_mortgages:
+                base_scores[product] = safe_score(mortgage_score)
+        else:
+            # Не предлагаем без явных сигналов или при категории розницы
+            base_scores["Семейная ипотека"] = 0.0
+            base_scores["Ипотека «Вторичное жилье»"] = 0.0
+            base_scores["Ипотека «Новостройка»"] = 0.0
         
         # Госпрограммы (гео-специфичные, низкий базовый приоритет)
         geo_programs = ["Госпрограмма «Новые субъекты»", "Дальневосточная и арктическая ипотека"]
@@ -1057,16 +1102,43 @@ class NBOModel:
         if num_add_to_cart > 0 or num_orders > 0:
             card_score += 0.2 * min((num_add_to_cart + num_orders) / 5.0, 1.0)
         
-        # 3. Категории брендов: розничная торговля, услуги, развлечения - оптимизировано
+        # 3. Категории брендов: розничная торговля, еда/напитки, услуги, развлечения - оптимизировано
         retail_signal = 0.0
+        food_signal = 0.0
+        
+        # Проверяем категории розничной торговли
         if check_category(top_brand_category, CATEGORY_KEYWORDS["retail"]):
+            retail_signal += 0.3
+        if check_category(top_category, CATEGORY_KEYWORDS["retail"]):
             retail_signal += 0.3
         
         retail_count = count_category_matches(brand_categories, CATEGORY_KEYWORDS["retail"])
         if retail_count > 0:
             retail_signal += 0.2 * min(retail_count / 2.0, 1.0)
         
-        card_score += min(retail_signal, 0.3)
+        # Проверяем категории еды/напитков (Foodstuffs and Beverages) - КРИТИЧНО для разнообразия
+        # Прямая проверка категории "Foodstuffs and Beverages"
+        if top_category:
+            top_category_lower = str(top_category).lower()
+            if any(kw in top_category_lower for kw in ["foodstuffs", "beverages", "beverage", "foodstuff", "еда", "продукты", "напитки"]):
+                food_signal += 0.8  # Еда/напитки - МАКСИМАЛЬНЫЙ сигнал для кредитной карты
+        
+        if top_brand_category:
+            top_brand_category_lower = str(top_brand_category).lower()
+            if any(kw in top_brand_category_lower for kw in ["foodstuffs", "beverages", "beverage", "foodstuff", "еда", "продукты", "напитки"]):
+                food_signal += 0.8
+        
+        # Дополнительная проверка через check_category
+        if check_category(top_brand_category, CATEGORY_KEYWORDS.get("food", [])):
+            food_signal += 0.5
+        if check_category(top_category, CATEGORY_KEYWORDS.get("food", [])):
+            food_signal += 0.5
+        
+        food_count = count_category_matches(brand_categories, CATEGORY_KEYWORDS.get("food", []))
+        if food_count > 0:
+            food_signal += 0.4 * min(food_count / 2.0, 1.0)
+        
+        card_score += min(retail_signal, 0.3) + min(food_signal, 1.0)  # Еда дает МАКСИМАЛЬНЫЙ бонус (до 1.0)
         
         # 4. Регулярная активность (ежедневные/еженедельные платежи)
         if engagement_duration > 0.3 and payment_frequency > 0.25:
@@ -1089,6 +1161,10 @@ class NBOModel:
         # 2. Высокий средний чек + много транзакций = накопления
         if avg_tx_normalized > 0.2 and payment_frequency > 0.4:
             deposit_score += 0.35
+        
+        # 2.1. Категории еды/напитков - регулярные покупки = накопления
+        if food_signal > 0.2 and payment_frequency > 0.3:
+            deposit_score += 0.3  # Регулярные покупки еды = стабильный доход = вклад
         
         # 3. Категории брендов: финансовые услуги, инвестиции - оптимизировано
         finance_signal = 0.0
@@ -1418,7 +1494,8 @@ class NBOModel:
         # Фильтруем общие категории и обеспечиваем разнообразие
         selected_products = []
         used_types = set()
-        max_per_type = 1  # Максимум 1 продукт каждого типа
+        max_per_type = 1  # Максимум 1 продукт каждого типа в топ-3
+        # Для более разнообразных рекомендаций, увеличиваем разнообразие
         
         for product, score in sorted_products:
             # Фильтруем общие категории и проверяем, что продукт в списке конкретных продуктов ПСБ
@@ -1426,6 +1503,48 @@ class NBOModel:
                 continue
             
             product_type = get_product_type(product)
+            
+            # ИСКЛЮЧЕНИЕ: ипотека - только при явных сигналах (score > 0.4) И есть реальные категории
+            # КРИТИЧНО: Если категория еды/напитков - ПОЛНЫЙ ЗАПРЕТ всех ипотек
+            if product_type == "mortgage":
+                top_category = user_profile.get("top_category")
+                has_real_category = top_category and top_category not in ["retail", "marketplace", "payments"]
+                
+                # Прямая проверка категории еды (включая "Foodstuffs and Beverages")
+                is_food = False
+                if top_category:
+                    top_category_lower = str(top_category).lower()
+                    is_food = any(kw in top_category_lower for kw in ["foodstuffs", "beverages", "beverage", "foodstuff", "еда", "продукты", "напитки"])
+                
+                if not is_food:
+                    top_brand_category = user_profile.get("top_brand_category")
+                    if top_brand_category:
+                        top_brand_category_lower = str(top_brand_category).lower()
+                        is_food = any(kw in top_brand_category_lower for kw in ["foodstuffs", "beverages", "beverage", "foodstuff", "еда", "продукты", "напитки"])
+                
+                # Дополнительная проверка через check_category
+                if not is_food and has_real_category:
+                    is_food = check_category(top_category, CATEGORY_KEYWORDS.get("food", []))
+                    top_brand_category = user_profile.get("top_brand_category")
+                    if top_brand_category and not is_food:
+                        is_food = check_category(top_brand_category, CATEGORY_KEYWORDS.get("food", []))
+                
+                # ПОЛНЫЙ ЗАПРЕТ ипотек при категории еды - ПРИОРИТЕТ 1
+                if is_food:
+                    continue  # Пропускаем ВСЕ ипотеки при категории еды
+                
+                # Дополнительная проверка через check_category
+                if not is_food and has_real_category:
+                    is_food = check_category(top_category, CATEGORY_KEYWORDS.get("food", []))
+                    top_brand_category = user_profile.get("top_brand_category")
+                    if top_brand_category and not is_food:
+                        is_food = check_category(top_brand_category, CATEGORY_KEYWORDS.get("food", []))
+                
+                if is_food:
+                    continue
+                
+                if score < 0.4 or not has_real_category:
+                    continue  # Пропускаем ипотеку, если нет явных сигналов или реальных категорий
             
             # Обеспечиваем разнообразие: не более max_per_type продуктов каждого типа
             type_count = sum(1 for p in selected_products if get_product_type(p["product"]) == product_type)

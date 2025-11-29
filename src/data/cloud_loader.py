@@ -890,9 +890,15 @@ class YandexDiskLoader:
         try:
             # Используем projection pushdown - загружаем только нужные колонки
             # ВАЖНО: используем только стандартные названия колонок из спецификации Yandex Cloud Data Set
-            # Без эвристик и альтернативных названий - только: item_id, brand_id, category, subcategory
+            # Согласно спецификации Yandex Cloud Data Set:
+            # - item_id: str (обязательно)
+            # - brand_id: u64 (опционально)
+            # - category: str (название категории, опционально, может быть null)
+            # - category_id: ID категории (опционально)
+            # - subcategory: str (подкатегория, опционально, может быть null)
+            # - price: f64 (цена как число с плавающей точкой, опционально, может быть null)
             needed_cols = ["item_id"]  # item_id обязателен
-            optional_cols = ["brand_id", "category", "category_id", "subcategory"]  # Стандартные колонки из спецификации
+            optional_cols = ["brand_id", "category", "category_id", "subcategory", "price"]  # Стандартные колонки из спецификации
             if include_embedding:
                 optional_cols.append("embedding")  # Добавляем embedding только если нужен
             
@@ -961,7 +967,7 @@ class YandexDiskLoader:
                 
                 # Собираем доступные колонки (обязательные + опциональные)
                 available_cols = ["item_id"]  # item_id всегда есть
-                optional_cols = ["brand_id", "category", "category_id", "subcategory"]
+                optional_cols = ["brand_id", "category", "category_id", "subcategory", "price"]
                 if include_embedding:
                     optional_cols.append("embedding")
                 for col in optional_cols:
@@ -1017,9 +1023,18 @@ class YandexDiskLoader:
         """
         try:
             # Используем projection pushdown - загружаем только нужные колонки
-            needed_cols = ["item_id", "brand_id", "category", "category_id", "subcategory"]
+            # Согласно спецификации Yandex Cloud Data Set для retail/items.pq:
+            # - item_id: str (обязательно)
+            # - brand_id: u64 (опционально)
+            # - category: str (название категории, опционально, может быть null)
+            # - subcategory: str (подкатегория, опционально, может быть null)
+            # - price: f64 (цена как число с плавающей точкой, опционально, может быть null или отрицательным)
+            # - embedding: array[f32, 300] (опционально)
+            # ПРИМЕЧАНИЕ: В retail/items.pq НЕТ category_id (только в marketplace/items.pq)
+            needed_cols = ["item_id"]  # item_id обязателен
+            optional_cols = ["brand_id", "category", "subcategory", "price"]  # Опциональные колонки
             if include_embedding:
-                needed_cols.append("embedding")  # Добавляем embedding только если нужен
+                optional_cols.append("embedding")  # Добавляем embedding только если нужен
             
             # Пробуем загрузить как LazyFrame для оптимизации
             cache_path = Path(self.cache_dir)
@@ -1031,10 +1046,15 @@ class YandexDiskLoader:
                 
                 # Проверяем, какие колонки доступны
                 schema = lazy_df.collect_schema()
-                available_cols = [col for col in needed_cols if col in schema]
                 
-                if not available_cols:
-                    print(f"⚠ В retail/items.pq нет нужных колонок: {needed_cols}")
+                # Собираем доступные колонки (обязательные + опциональные)
+                available_cols = ["item_id"]  # item_id всегда есть
+                for col in optional_cols:
+                    if col in schema:
+                        available_cols.append(col)
+                
+                if "item_id" not in schema:
+                    print(f"⚠ В retail/items.pq нет обязательной колонки item_id")
                     print(f"   Доступные колонки: {list(schema.keys())}")
                     return pl.DataFrame().lazy()
                 
@@ -1079,8 +1099,13 @@ class YandexDiskLoader:
                     return pl.DataFrame().lazy() if use_lazy else pl.DataFrame()
                 
                 # Собираем доступные колонки (обязательные + опциональные)
+                # Согласно спецификации Yandex Cloud Data Set для retail/items.pq:
+                # - category: str (название категории как строка)
+                # - subcategory: str (подкатегория как строка)
+                # - price: f64 (цена как число с плавающей точкой, может быть null или отрицательным)
+                # ПРИМЕЧАНИЕ: В retail/items.pq НЕТ category_id (только в marketplace/items.pq)
                 available_cols = ["item_id"]  # item_id всегда есть
-                optional_cols = ["brand_id", "category", "category_id", "subcategory"]
+                optional_cols = ["brand_id", "category", "subcategory", "price"]
                 if include_embedding:
                     optional_cols.append("embedding")
                 for col in optional_cols:
@@ -1116,6 +1141,138 @@ class YandexDiskLoader:
                 
         except Exception as e:
             print(f"⚠ Ошибка при загрузке retail/items.pq: {e}")
+            return pl.DataFrame().lazy()
+    
+    def load_payments_items(
+        self,
+        brand_ids: Optional[List[str]] = None,
+        item_ids: Optional[List[str]] = None,
+        use_lazy: bool = True,
+        include_embedding: bool = False
+    ) -> pl.LazyFrame:
+        """
+        Загружает каталог товаров payments с оптимизацией.
+        
+        :param brand_ids: Список brand_id для фильтрации (predicate pushdown) - экономит память
+        :param item_ids: Список item_id для фильтрации (predicate pushdown) - экономит память
+        :param use_lazy: Использовать LazyFrame для отложенной загрузки
+        :param include_embedding: Загружать ли embedding (только если нужен, т.к. занимает много места)
+        :return: LazyFrame или DataFrame с товарами
+        """
+        try:
+            # Используем projection pushdown - загружаем только нужные колонки
+            # Согласно спецификации Yandex Cloud Data Set для payments/items.pq:
+            # - item_id: str (обязательно) - может быть approximate_item_id
+            # - brand_id: u64 (опционально)
+            # - category: str (название категории, опционально, может быть null)
+            # - category_id: ID категории (опционально)
+            # - subcategory: str (подкатегория, опционально, может быть null)
+            # - price: f64 (цена как число с плавающей точкой, опционально, может быть null)
+            needed_cols = ["item_id"]  # item_id обязателен
+            optional_cols = ["brand_id", "category", "category_id", "subcategory", "price"]  # Опциональные колонки
+            if include_embedding:
+                optional_cols.append("embedding")  # Добавляем embedding только если нужен
+            
+            # Пробуем загрузить как LazyFrame для оптимизации
+            cache_path = Path(self.cache_dir)
+            cache_file = cache_path / "payments_items.pq"
+            
+            if cache_file.exists():
+                # Загружаем из кэша с projection pushdown
+                lazy_df = pl.scan_parquet(str(cache_file))
+                
+                # Проверяем, какие колонки доступны
+                schema = lazy_df.collect_schema()
+                
+                # Собираем доступные колонки (обязательные + опциональные)
+                available_cols = ["item_id"]  # item_id всегда есть
+                for col in optional_cols:
+                    if col in schema:
+                        available_cols.append(col)
+                
+                if "item_id" not in schema:
+                    print(f"⚠ В payments/items.pq нет обязательной колонки item_id")
+                    print(f"   Доступные колонки: {list(schema.keys())}")
+                    return pl.DataFrame().lazy()
+                
+                # Projection pushdown: выбираем только нужные колонки
+                lazy_df = lazy_df.select(available_cols)
+                
+                # Predicate pushdown: фильтруем по brand_id и item_id ДО загрузки
+                # ВАЖНО: проверяем наличие колонки в available_cols (после select)
+                if brand_ids and "brand_id" in available_cols:
+                    try:
+                        brand_ids_str = [str(bid) for bid in brand_ids]
+                        lazy_df = lazy_df.filter(pl.col("brand_id").cast(pl.Utf8).is_in(brand_ids_str))
+                        print(f"⚡ Применен predicate pushdown: фильтрация по {len(brand_ids)} брендам ДО загрузки")
+                    except Exception as e:
+                        print(f"⚠ Ошибка фильтрации по brand_id: {e}. Пропускаем фильтрацию по brand_id.")
+                elif brand_ids:
+                    print(f"⚠ brand_id не найден в payments/items.pq. Доступные колонки: {available_cols}. Пропускаем фильтрацию по brand_id.")
+                
+                if item_ids and "item_id" in available_cols:
+                    try:
+                        item_ids_str = [str(iid) for iid in item_ids]
+                        lazy_df = lazy_df.filter(pl.col("item_id").cast(pl.Utf8).is_in(item_ids_str))
+                        print(f"⚡ Применен predicate pushdown: фильтрация по {len(item_ids)} товарам ДО загрузки")
+                    except Exception as e:
+                        print(f"⚠ Ошибка фильтрации по item_id: {e}. Пропускаем фильтрацию по item_id.")
+                elif item_ids:
+                    print(f"⚠ item_id не найден в payments/items.pq. Доступные колонки: {available_cols}. Пропускаем фильтрацию по item_id.")
+                
+                if use_lazy:
+                    return lazy_df
+                else:
+                    return lazy_df.collect()
+            else:
+                # Загружаем из облака (только если нет в кэше)
+                print(f"⚠ payments/items.pq не в кэше. Рекомендуется закэшировать файл для оптимизации.")
+                df = self.read_parquet_from_url("payments/items.pq", normalize=False)
+                
+                # Проверяем обязательные колонки
+                if "item_id" not in df.columns:
+                    print(f"⚠ В payments/items.pq нет обязательной колонки item_id")
+                    print(f"   Доступные колонки: {list(df.columns)}")
+                    return pl.DataFrame().lazy() if use_lazy else pl.DataFrame()
+                
+                # Собираем доступные колонки (обязательные + опциональные)
+                available_cols = ["item_id"]  # item_id всегда есть
+                optional_cols = ["brand_id", "category", "category_id", "subcategory", "price"]
+                if include_embedding:
+                    optional_cols.append("embedding")
+                for col in optional_cols:
+                    if col in df.columns:
+                        available_cols.append(col)
+                
+                if available_cols:
+                    df = df.select(available_cols)
+                    
+                    # Фильтруем по brand_id и item_id если указаны
+                    # ВАЖНО: проверяем наличие колонки в df.columns (после select)
+                    if brand_ids and "brand_id" in df.columns:
+                        try:
+                            brand_ids_str = [str(bid) for bid in brand_ids]
+                            df = df.filter(pl.col("brand_id").cast(pl.Utf8).is_in(brand_ids_str))
+                            print(f"⚡ Отфильтровано по {len(brand_ids)} брендам")
+                        except Exception as e:
+                            print(f"⚠ Ошибка фильтрации по brand_id: {e}. Пропускаем фильтрацию по brand_id.")
+                    elif brand_ids:
+                        print(f"⚠ brand_id не найден в payments/items.pq. Доступные колонки: {list(df.columns)}. Пропускаем фильтрацию по brand_id.")
+                    
+                    if item_ids and "item_id" in df.columns:
+                        try:
+                            item_ids_str = [str(iid) for iid in item_ids]
+                            df = df.filter(pl.col("item_id").cast(pl.Utf8).is_in(item_ids_str))
+                            print(f"⚡ Отфильтровано по {len(item_ids)} товарам")
+                        except Exception as e:
+                            print(f"⚠ Ошибка фильтрации по item_id: {e}. Пропускаем фильтрацию по item_id.")
+                    elif item_ids:
+                        print(f"⚠ item_id не найден в payments/items.pq. Доступные колонки: {list(df.columns)}. Пропускаем фильтрацию по item_id.")
+                
+                return df.lazy() if use_lazy else df
+                
+        except Exception as e:
+            print(f"⚠ Ошибка при загрузке payments/items.pq: {e}")
             return pl.DataFrame().lazy()
     
     def load_payments_receipts(

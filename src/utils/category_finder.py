@@ -225,42 +225,8 @@ def find_categories_for_brands_aggressive(
                                 brand_to_category[brand_id] = str(top_category)
                                 print(f"         ✅ Brand {brand_id}: '{top_category}' через item_id ({brand_items.height} товаров)")
     
-    # Уровень 4: Попытка найти в brands.pq (если есть категории там)
-    missing_brands = [bid for bid in brand_ids_normalized if bid not in brand_to_category]
-    if missing_brands and loader:
-        print(f"   📦 Уровень 4: Поиск в brands.pq для {len(missing_brands)} брендов...")
-        try:
-            brands_df = loader.load_brands()
-            if brands_df is not None and brands_df.height > 0:
-                # Проверяем, есть ли категории в brands
-                category_col = None
-                for col in brands_df.columns:
-                    if col.lower() in ["category", "category_id", "brand_category"]:
-                        category_col = col
-                        break
-                
-                if category_col and "brand_id" in brands_df.columns:
-                    brands_normalized = brands_df.with_columns(
-                        pl.col("brand_id").cast(pl.Utf8, strict=False).str.replace(r"\.0$", "").alias("brand_id_normalized")
-                    )
-                    
-                    for brand_id in missing_brands:
-                        if brand_id in brand_to_category:
-                            continue
-                        
-                        brand_row = brands_normalized.filter(
-                            pl.col("brand_id_normalized") == str(brand_id)
-                        ).filter(
-                            pl.col(category_col).is_not_null() &
-                            (pl.col(category_col) != "")
-                        )
-                        
-                        if brand_row.height > 0:
-                            category = brand_row[category_col][0]
-                            brand_to_category[brand_id] = str(category)
-                            print(f"         ✅ Brand {brand_id}: '{category}' из brands.pq")
-        except Exception as e:
-            print(f"         ⚠ Ошибка при поиске в brands.pq: {e}")
+    # Уровень 4: Удален - категории в brands.pq отсутствуют
+    # Пропускаем поиск в brands.pq, так как категорий там нет
     
     found_count = len(brand_to_category)
     missing_count = len(brand_ids_normalized) - found_count

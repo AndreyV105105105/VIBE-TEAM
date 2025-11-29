@@ -628,13 +628,16 @@ def create_user_profile(
                 from collections import Counter
                 profile["brand_categories"] = brand_categories
                 profile["top_brand_category"] = Counter(brand_categories).most_common(1)[0][0]
-                print(f"✅ Обогащено {len(brand_categories)} категорий брендов из маппинга")
-                print(f"   ✅ top_brand_category: {profile['top_brand_category']}")
+                # Подсчитываем разнообразие категорий
+                unique_categories = set(brand_categories)
+                if len(unique_categories) > 1:
+                    print(f"✅ Обогащено {len(brand_categories)} категорий брендов (уникальных: {len(unique_categories)})")
+                else:
+                    print(f"✅ Обогащено {len(brand_categories)} категорий брендов")
                 
                 # Fallback: если top_category не найдена, используем top_brand_category
                 if not profile.get("top_category") and profile["top_brand_category"]:
                     profile["top_category"] = profile["top_brand_category"]
-                    print(f"   ℹ Использована top_brand_category как top_category: {profile['top_category']}")
             else:
                 # Если brands_categories_map не содержит категорий, но есть brand_ids, пытаемся извлечь из items
                 if profile.get("brand_ids") and items_with_embeddings:
@@ -671,20 +674,23 @@ def create_user_profile(
                                     top_cat = valid_cats["category"].mode().to_list()
                                     if top_cat:
                                         brand_categories_from_items.append(top_cat[0])
-                                        print(f"      ✅ Найдена категория '{top_cat[0]}' для бренда {brand_id_str} из {catalog_name}")
+                                        # Убираем избыточный лог для каждого бренда
                                         break  # Нашли, переходим к следующему бренду
                     
                     if brand_categories_from_items:
                         from collections import Counter
                         profile["brand_categories"] = brand_categories_from_items
                         profile["top_brand_category"] = Counter(brand_categories_from_items).most_common(1)[0][0]
-                        print(f"   ✅ Извлечено {len(brand_categories_from_items)} категорий брендов из items каталогов")
-                        print(f"   ✅ top_brand_category: {profile['top_brand_category']}")
+                        # Подсчитываем разнообразие категорий
+                        unique_cats = set(brand_categories_from_items)
+                        if len(unique_cats) > 1:
+                            print(f"   ✅ Извлечено {len(brand_categories_from_items)} категорий брендов (уникальных: {len(unique_cats)})")
+                        else:
+                            print(f"   ✅ Извлечено {len(brand_categories_from_items)} категорий брендов")
                         
                         # Fallback: если top_category не найдена, используем top_brand_category
                         if not profile.get("top_category"):
                             profile["top_category"] = profile["top_brand_category"]
-                            print(f"   ℹ Использована top_brand_category (из items) как top_category: {profile['top_category']}")
                     
                     # Если категории все еще не найдены, используем эвристики
                     if not profile.get("top_category") and not profile.get("top_brand_category"):

@@ -47,87 +47,192 @@ def build_behavior_graph(
     
     # События маркетплейса - используем категории из items если доступны
     if mp_df.height > 0:
-        # Используем category из items если есть, иначе category_id
-        category_col = "category" if "category" in mp_df.columns else "category_id"
-        subcategory_col = "subcategory" if "subcategory" in mp_df.columns else None
-        has_brand_id = "brand_id" in mp_df.columns
+        # Определяем доступные колонки - сначала получаем схему
+        try:
+            # Если это LazyFrame, собираем схему без данных
+            if hasattr(mp_df, 'collect_schema'):
+                available_columns = mp_df.collect_schema().keys()
+            else:
+                available_columns = mp_df.columns
+        except:
+            # Fallback на прямой доступ к columns
+            try:
+                available_columns = mp_df.columns
+            except:
+                available_columns = []
         
-        # Группируем по категориям и action_type
-        agg_exprs = [
-            pl.count().alias("count"),
-            pl.col("timestamp").max().alias("last_timestamp"), # Используем последнее событие для актуальности
-            pl.col("item_id").first().alias("top_item")
-        ]
+        # Определяем доступные колонки для категорий
+        has_category = "category" in available_columns
+        has_category_id = "category_id" in available_columns
+        category_col = None
+        
+        if has_category:
+            category_col = "category"
+        elif has_category_id:
+            category_col = "category_id"
+        
+        subcategory_col = "subcategory" if "subcategory" in available_columns else None
+        has_brand_id = "brand_id" in available_columns
+        has_action_type = "action_type" in available_columns
+        has_item_id = "item_id" in available_columns
+        
+        # Группируем по категориям (если есть) или по item_id
+        agg_exprs = [pl.count().alias("count")]
+        
+        # Проверяем наличие обязательных колонок перед использованием
+        if "timestamp" in available_columns:
+            agg_exprs.append(pl.col("timestamp").max().alias("last_timestamp"))
+        
+        if has_item_id:
+            agg_exprs.append(pl.col("item_id").first().alias("top_item"))
+        
         if has_brand_id:
             agg_exprs.append(pl.col("brand_id").first().alias("brand_id"))
         
-        if "action_type" in mp_df.columns:
-            category_agg = mp_df.group_by([category_col, "action_type"]).agg(agg_exprs).sort("count", descending=True).head(30)
-        else:
-            category_agg = mp_df.group_by(category_col).agg(agg_exprs).sort("count", descending=True).head(30)
-        
-        for row in category_agg.iter_rows(named=True):
-            category = row.get(category_col) or row.get("category_id") or "unknown"
-            action_type = row.get("action_type", "view")
-            count = row.get("count", 1)
-            timestamp = row.get("last_timestamp")
-            if isinstance(timestamp, datetime):
-                event_time = timestamp
+        # Группируем в зависимости от доступных колонок
+        try:
+            if category_col and category_col in available_columns:
+                if has_action_type:
+                    category_agg = mp_df.group_by([category_col, "action_type"]).agg(agg_exprs).sort("count", descending=True).head(30)
+                else:
+                    category_agg = mp_df.group_by(category_col).agg(agg_exprs).sort("count", descending=True).head(30)
+            elif has_item_id:
+                # Если нет категорий, группируем по item_id
+                if has_action_type:
+                    category_agg = mp_df.group_by(["item_id", "action_type"]).agg(agg_exprs).sort("count", descending=True).head(30)
+                else:
+                    category_agg = mp_df.group_by("item_id").agg(agg_exprs).sort("count", descending=True).head(30)
             else:
-                event_time = datetime.now()
-            
-            # Вычисляем базовый вес
-            base_weight = ACTION_WEIGHTS.get(action_type, 1.0)
-            
-            events.append({
-                "timestamp": event_time,
-                "type": action_type,
-                "item_id": row.get("top_item", "unknown"),
-                "category": str(category),
-                "brand_id": row.get("brand_id"),
-                "domain": "marketplace",
-                "weight": count * base_weight  # Учитываем важность действия
-            })
+                # Если нет ни категорий, ни item_id - пропускаем группировку
+                print(f"⚠ В mp_df нет доступных колонок для группировки (category, category_id, item_id)")
+                category_agg = pl.DataFrame()
+        except Exception as e:
+            print(f"⚠ Ошибка при группировке mp_df: {e}")
+            category_agg = pl.DataFrame()
+        
+        # Обрабатываем результаты группировки только если есть данные
+        if category_agg.height > 0:
+            for row in category_agg.iter_rows(named=True):
+                # Извлекаем категорию (может быть из category_col или "unknown")
+                if category_col:
+                    category = row.get(category_col) or "unknown"
+                else:
+                    # Если нет категории, используем item_id как идентификатор
+                    category = f"item_{row.get('top_item', 'unknown')}"
+                
+                action_type = row.get("action_type", "view")
+                count = row.get("count", 1)
+                timestamp = row.get("last_timestamp")
+                if isinstance(timestamp, datetime):
+                    event_time = timestamp
+                else:
+                    event_time = datetime.now()
+                
+                # Вычисляем базовый вес
+                base_weight = ACTION_WEIGHTS.get(action_type, 1.0)
+                
+                events.append({
+                    "timestamp": event_time,
+                    "type": action_type,
+                    "item_id": row.get("top_item", "unknown"),
+                    "category": str(category),
+                    "brand_id": row.get("brand_id"),
+                    "domain": "marketplace",
+                    "weight": count * base_weight  # Учитываем важность действия
+                })
     
     # События ритейла - используем категории из items
     if retail_df is not None and retail_df.height > 0:
-        category_col = "category" if "category" in retail_df.columns else "category_id"
-        has_brand_id = "brand_id" in retail_df.columns
+        # Определяем доступные колонки - сначала получаем схему
+        try:
+            # Если это LazyFrame, собираем схему без данных
+            if hasattr(retail_df, 'collect_schema'):
+                available_columns_retail = retail_df.collect_schema().keys()
+            else:
+                available_columns_retail = retail_df.columns
+        except:
+            # Fallback на прямой доступ к columns
+            try:
+                available_columns_retail = retail_df.columns
+            except:
+                available_columns_retail = []
         
-        agg_exprs = [
-            pl.count().alias("count"),
-            pl.col("timestamp").max().alias("last_timestamp"),
-            pl.col("item_id").first().alias("top_item")
-        ]
+        # Определяем доступные колонки для категорий
+        has_category = "category" in available_columns_retail
+        has_category_id = "category_id" in available_columns_retail
+        category_col = None
+        
+        if has_category:
+            category_col = "category"
+        elif has_category_id:
+            category_col = "category_id"
+        
+        has_brand_id = "brand_id" in available_columns_retail
+        has_action_type = "action_type" in available_columns_retail
+        has_item_id = "item_id" in available_columns_retail
+        
+        agg_exprs = [pl.count().alias("count")]
+        
+        # Проверяем наличие обязательных колонок перед использованием
+        if "timestamp" in available_columns_retail:
+            agg_exprs.append(pl.col("timestamp").max().alias("last_timestamp"))
+        
+        if has_item_id:
+            agg_exprs.append(pl.col("item_id").first().alias("top_item"))
+        
         if has_brand_id:
             agg_exprs.append(pl.col("brand_id").first().alias("brand_id"))
         
-        if "action_type" in retail_df.columns:
-            retail_agg = retail_df.group_by([category_col, "action_type"]).agg(agg_exprs).sort("count", descending=True).head(20)
-        else:
-            retail_agg = retail_df.group_by(category_col).agg(agg_exprs).sort("count", descending=True).head(20)
-        
-        for row in retail_agg.iter_rows(named=True):
-            category = row.get(category_col) or "unknown"
-            action_type = row.get("action_type", "view")
-            count = row.get("count", 1)
-            timestamp = row.get("last_timestamp")
-            if isinstance(timestamp, datetime):
-                event_time = timestamp
+        # Группируем в зависимости от доступных колонок
+        try:
+            if category_col and category_col in available_columns_retail:
+                if has_action_type:
+                    retail_agg = retail_df.group_by([category_col, "action_type"]).agg(agg_exprs).sort("count", descending=True).head(20)
+                else:
+                    retail_agg = retail_df.group_by(category_col).agg(agg_exprs).sort("count", descending=True).head(20)
+            elif has_item_id:
+                # Если нет категорий, группируем по item_id
+                if has_action_type:
+                    retail_agg = retail_df.group_by(["item_id", "action_type"]).agg(agg_exprs).sort("count", descending=True).head(20)
+                else:
+                    retail_agg = retail_df.group_by("item_id").agg(agg_exprs).sort("count", descending=True).head(20)
             else:
-                event_time = datetime.now()
-            
-            base_weight = ACTION_WEIGHTS.get(action_type, 1.0)
-            
-            events.append({
-                "timestamp": event_time,
-                "type": action_type,
-                "item_id": row.get("top_item", "unknown"),
-                "category": str(category),
-                "brand_id": row.get("brand_id"),
-                "domain": "retail",
-                "weight": count * base_weight
-            })
+                # Если нет ни категорий, ни item_id - пропускаем группировку
+                print(f"⚠ В retail_df нет доступных колонок для группировки (category, category_id, item_id)")
+                retail_agg = pl.DataFrame()
+        except Exception as e:
+            print(f"⚠ Ошибка при группировке retail_df: {e}")
+            retail_agg = pl.DataFrame()
+        
+        # Обрабатываем результаты группировки только если есть данные
+        if retail_agg.height > 0:
+            for row in retail_agg.iter_rows(named=True):
+                # Извлекаем категорию (может быть из category_col или "unknown")
+                if category_col:
+                    category = row.get(category_col) or "unknown"
+                else:
+                    # Если нет категории, используем item_id как идентификатор
+                    category = f"item_{row.get('top_item', 'unknown')}"
+                
+                action_type = row.get("action_type", "view")
+                count = row.get("count", 1)
+                timestamp = row.get("last_timestamp")
+                if isinstance(timestamp, datetime):
+                    event_time = timestamp
+                else:
+                    event_time = datetime.now()
+                
+                base_weight = ACTION_WEIGHTS.get(action_type, 1.0)
+                
+                events.append({
+                    "timestamp": event_time,
+                    "type": action_type,
+                    "item_id": row.get("top_item", "unknown"),
+                    "category": str(category),
+                    "brand_id": row.get("brand_id"),
+                    "domain": "retail",
+                    "weight": count * base_weight
+                })
     
     # События платежей - группируем по брендам
     if pay_df.height > 0 and "brand_id" in pay_df.columns:

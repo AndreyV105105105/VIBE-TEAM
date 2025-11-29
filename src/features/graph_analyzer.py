@@ -99,38 +99,208 @@ def graph_to_text_description(
     return "\n".join(description_parts)
 
 
+def extract_product_from_analysis(analysis_text: str) -> tuple[str, str]:
+    """
+    Извлекает продукт и обоснование из анализа графа.
+    
+    :param analysis_text: Текст анализа от YandexGPT
+    :return: Кортеж (название продукта, обоснование)
+    """
+    import re
+    
+    # Список точных названий продуктов ПСБ (приоритетные)
+    exact_products = [
+        "Семейная ипотека",
+        "Ипотека «Вторичное жилье»",
+        "Ипотека «Новостройка»",
+        "Военная ипотека",
+        "Госпрограмма «Новые субъекты»",
+        "Кредитная карта «100+»",
+        "Кредитная карта «180 дней без %»",
+        "Дебетовая карта «Твой кэшбэк»",
+        "Дебетовая карта «Только вперед»",
+        "Зарплатная карта «Твой Плюс»",
+        "Вклад «Сильная ставка»",
+        "Вклад «Ставка на будущее»",
+        "Вклад «Мой доход»",
+        "Накопительный счет «Про запас»",
+        "Кредит на любые цели",
+        "Экспресс-кредит «Турбоденьги»",
+        "ПСБ Инвестиции"
+    ]
+    
+    # Список общих категорий продуктов для fallback
+    category_keywords = {
+        "ипотека": ["ипотека", "ипотечн", "жилье", "недвижимость", "квартир"],
+        "кредитная карта": ["кредитн", "кредитная карта", "карта кредит"],
+        "дебетовая карта": ["дебетов", "дебетная карта"],
+        "вклад": ["вклад", "депозит", "накопительн"],
+        "кредит": ["кредит на любые цели", "кредит наличными"],
+        "инвестиции": ["инвестиц", "псб инвестиции"]
+    }
+    
+    analysis_text_clean = analysis_text.strip()
+    analysis_lower = analysis_text_clean.lower()
+    
+    # Сначала ищем точные названия продуктов
+    found_product = None
+    for product in exact_products:
+        # Поиск без учета регистра и кавычек
+        product_normalized = product.lower().replace('«', '"').replace('»', '"')
+        analysis_normalized = analysis_lower.replace('«', '"').replace('»', '"')
+        
+        # Проверяем частичное совпадение (например, "Ипотека «Вторичное жилье»" может быть написано как "Ипотека Вторичное жилье")
+        if product_normalized in analysis_normalized:
+            found_product = product
+            break
+        
+        # Также проверяем ключевые слова из названия
+        product_keywords = product.lower().split()
+        if len(product_keywords) >= 2:
+            # Проверяем, что хотя бы 2 ключевых слова найдены
+            matches = sum(1 for kw in product_keywords if len(kw) > 3 and kw in analysis_normalized)
+            if matches >= 2:
+                found_product = product
+                break
+    
+    # Если не нашли точное название, ищем по категориям
+    if not found_product:
+        for category, keywords in category_keywords.items():
+            for keyword in keywords:
+                if keyword in analysis_lower:
+                    # Выбираем дефолтный продукт для категории
+                    if category == "ипотека":
+                        found_product = "Семейная ипотека"
+                    elif category == "кредитная карта":
+                        found_product = "Кредитная карта «100+»"
+                    elif category == "дебетовая карта":
+                        found_product = "Дебетовая карта «Твой кэшбэк»"
+                    elif category == "вклад":
+                        found_product = "Вклад «Сильная ставка»"
+                    elif category == "кредит":
+                        found_product = "Кредит на любые цели"
+                    elif category == "инвестиции":
+                        found_product = "ПСБ Инвестиции"
+                    break
+            if found_product:
+                break
+    
+    # Извлекаем обоснование
+    reason = analysis_text_clean
+    
+    # Пытаемся найти обоснование после метки "Обоснование:" или "Объяснение:"
+    reason_patterns = [
+        r"Обоснование\s*:?\s*(.+)",
+        r"Объяснение\s*:?\s*(.+)",
+        r"Почему\s*:?\s*(.+)",
+    ]
+    
+    for pattern in reason_patterns:
+        match = re.search(pattern, analysis_text_clean, re.IGNORECASE | re.DOTALL)
+        if match:
+            reason = match.group(1).strip()
+            break
+    
+    # Если нашли продукт, пытаемся извлечь обоснование после него
+    if found_product and not reason.startswith("Обоснование"):
+        # Ищем паттерн "Продукт: ... Обоснование: ..."
+        product_label_pattern = r"Продукт\s*:?\s*[^\n]+\n\s*Обоснование\s*:?\s*(.+)"
+        match = re.search(product_label_pattern, analysis_text_clean, re.IGNORECASE | re.DOTALL)
+        if match:
+            reason = match.group(1).strip()
+    
+    # Если обоснование не найдено или слишком короткое, используем весь текст
+    if not reason or len(reason) < 10:
+        reason = analysis_text_clean
+        # Если есть продукт, удаляем его из обоснования
+        if found_product:
+            reason = reason.replace(found_product, "").strip()
+            reason = re.sub(r'^[:\-–—\s]+', '', reason).strip()
+    
+    if not reason or len(reason) < 10:
+        reason = "На основе анализа графа поведения пользователя"
+    
+    return found_product or "Кредитная карта «100+»", reason
+
+
 def analyze_graph_with_yandexgpt(
     graph: nx.DiGraph,
     user_id: str,
     brands_map: Optional[Dict[str, str]] = None,
     max_nodes: int = 10  # Уменьшено до 10 для экономии токенов
-) -> Dict[str, str]:
+) -> Dict[str, any]:
     """
-    Анализирует граф поведения через YandexGPT.
+    Анализирует граф поведения через YandexGPT и возвращает рекомендации.
     
     :param graph: Граф поведения пользователя
     :param user_id: ID пользователя
     :param brands_map: Маппинг brand_id -> brand_name (опционально)
     :param max_nodes: Максимальное количество узлов для анализа
-    :return: Словарь с результатами анализа
+    :return: Словарь с результатами анализа, включая рекомендации
     """
     graph_description = graph_to_text_description(graph, max_nodes, brands_map=brands_map)
     
-    # Максимально сжатый промпт
-    prompt = f"П:{user_id}|{graph_description}|Продукт? (Ипотека/Кредитка/Вклад/Кредит) Обоснование: 1-2 предл."
+    # Улучшенный промпт с явным запросом продукта и списком доступных продуктов
+    available_products = """Доступные продукты ПСБ:
+Ипотечные:
+- Семейная ипотека
+- Ипотека «Вторичное жилье»
+- Ипотека «Новостройка»
+- Военная ипотека
+- Госпрограмма «Новые субъекты»
+
+Карты:
+- Кредитная карта «100+»
+- Кредитная карта «180 дней без %»
+- Дебетовая карта «Твой кэшбэк»
+- Дебетовая карта «Только вперед»
+- Зарплатная карта «Твой Плюс»
+
+Вклады:
+- Вклад «Сильная ставка»
+- Вклад «Ставка на будущее»
+- Вклад «Мой доход»
+- Накопительный счет «Про запас»
+
+Кредиты:
+- Кредит на любые цели
+- Экспресс-кредит «Турбоденьги»
+
+Инвестиции:
+- ПСБ Инвестиции"""
     
-    instructions = "Эксперт по поведенческим данным. Анализ графа → продукт + краткое обоснование."
+    # Улучшенный промпт с явным запросом продукта
+    prompt = f"""Пользователь: {user_id}
+Граф поведения: {graph_description}
+
+Проанализируй граф поведения и порекомендуй ОДИН наиболее подходящий банковский продукт ПСБ.
+
+{available_products}
+
+Формат ответа:
+Продукт: [точное название продукта из списка выше]
+Обоснование: [краткое объяснение 1-2 предложения, почему этот продукт подходит]"""
+    
+    instructions = """Ты эксперт по анализу поведенческих данных банковских клиентов.
+Проанализируй граф поведения пользователя и порекомендуй ОДИН наиболее подходящий продукт.
+Учитывай последовательности действий, категории товаров и бренды.
+Будь конкретным в рекомендации - укажи точное название продукта."""
     
     try:
         analysis = call_yandex_gpt(
             input_text=prompt,
             instructions=instructions,
-            temperature=0.3
+            temperature=0.2  # Снижаем температуру для более детерминированных ответов
         )
+        
+        # Извлекаем продукт и обоснование из анализа
+        product, reason = extract_product_from_analysis(analysis)
         
         return {
             "user_id": user_id,
             "analysis": analysis,
+            "recommended_product": product,
+            "reason": reason,
             "graph_stats": {
                 "nodes": graph.number_of_nodes(),
                 "edges": graph.number_of_edges(),
@@ -142,6 +312,8 @@ def analyze_graph_with_yandexgpt(
         return {
             "user_id": user_id,
             "analysis": "Не удалось проанализировать граф",
+            "recommended_product": None,
+            "reason": None,
             "error": str(e)
         }
 

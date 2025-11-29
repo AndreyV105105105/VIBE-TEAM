@@ -127,19 +127,9 @@ def process_user(
                             
                     print(f"✅ Создан маппинг названий для {len(brands_map)} брендов")
                     
-                    # Создаем маппинг brand_id -> category из brands.pq (если есть)
-                    if brand_category_col:
-                        for row in brands_df.iter_rows(named=True):
-                            # Нормализуем ID
-                            brand_id_raw = str(row.get(brand_id_col, ""))
-                            if brand_id_raw.endswith(".0"):
-                                brand_id_raw = brand_id_raw[:-2]
-                            brand_id = brand_id_raw
-                            
-                            category = str(row.get(brand_category_col, ""))
-                            if brand_id and category and category.lower() not in ["none", "null", "nan", ""]:
-                                brands_categories_map[brand_id] = category
-                        print(f"✅ Создан маппинг категорий из brands.pq для {len(brands_categories_map)} брендов")
+                    # Пропускаем создание маппинга категорий из brands.pq
+                    # Категории в brands.pq отсутствуют, используем только items.pq
+                    print(f"ℹ️ Категории брендов не ищутся в brands.pq (их там нет), используем items.pq")
             else:
                 print(f"⚠ Справочник брендов пуст или не найден")
         except Exception as e:
@@ -345,52 +335,63 @@ def process_user(
                     available_cols = list(schema.keys())
                     
                     # Собираем список колонок для select (только те, что есть в данных)
-                    select_cols = ["user_id", "item_id", "timestamp", "domain"]
+                    select_cols = []
+                    
+                    # Проверяем обязательные колонки
+                    required_cols = ["user_id", "item_id", "timestamp", "domain"]
+                    missing_required = [col for col in required_cols if col not in available_cols]
+                    if missing_required:
+                        print(f"⚠️ Предупреждение: отсутствуют обязательные колонки: {missing_required}")
+                        print(f"   Доступные колонки: {available_cols}")
+                    
+                    # Добавляем обязательные колонки, если они есть
+                    for col in required_cols:
+                        if col in available_cols:
+                            select_cols.append(col)
                     
                     # Добавляем опциональные колонки только если они есть
-                    if "category_id" in available_cols:
-                        select_cols.append(pl.col("category_id").alias("category_id"))
-                    if "brand_id" in available_cols:
-                        select_cols.append(pl.col("brand_id").alias("brand_id"))
-                    if "action_type" in available_cols:
-                        select_cols.append(pl.col("action_type").alias("action_type"))
-                    if "subdomain" in available_cols:
-                        select_cols.append(pl.col("subdomain").alias("subdomain"))
-                    if "price" in available_cols:
-                        select_cols.append(pl.col("price").alias("price"))
-                    if "count" in available_cols:
-                        select_cols.append(pl.col("count").alias("count"))
-                    if "os" in available_cols:
-                        select_cols.append(pl.col("os").alias("os"))
+                    optional_cols = ["category_id", "category", "brand_id", "action_type", "subdomain", "price", "count", "os"]
+                    for col in optional_cols:
+                        if col in available_cols:
+                            select_cols.append(col)
                     
-                    user_marketplace_lazy = (
-                        marketplace_lazy
-                        .filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
-                        # Выбираем только нужные колонки для ускорения (только те, что есть)
-                        .select(select_cols)
-                    )
-                    
-                    # Проверяем тип timestamp перед сортировкой
-                    timestamp_dtype = schema.get("timestamp")
-                    if timestamp_dtype == pl.Duration:
-                        # Если timestamp в формате Duration, пропускаем сортировку
-                        # Просто берем первые 100 строк
-                        print("⚠ Timestamp в формате Duration, пропускаем сортировку")
-                        user_marketplace = user_marketplace_lazy.limit(100).collect()
+                    if not select_cols:
+                        print(f"⚠️ Ошибка: нет доступных колонок для выбора. Пропускаем marketplace events.")
+                        user_marketplace = pl.DataFrame()
                     else:
-                        # Ограничиваем количество событий для экономии памяти и токенов
-                        # Берем только последние 100 событий и агрегируем
-                        print("📅 Сортировка по timestamp...")
-                        user_marketplace = user_marketplace_lazy.sort("timestamp", descending=True).limit(100).collect()
-                    
-                    print(f"✅ Найдено {user_marketplace.height} событий marketplace для пользователя {user_id}")
-                    
-                    # Агрегируем данные: топ категории, топ товары
-                    if user_marketplace.height > 0:
-                        # Группируем по категориям и товарам для упрощения
-                        user_marketplace = user_marketplace.select([
-                            "timestamp", "item_id", "category_id", "domain"
-                        ]).head(50)  # Ограничиваем до 50 самых свежих событий
+                        user_marketplace_lazy = (
+                            marketplace_lazy
+                            .filter(pl.col("user_id").cast(pl.Utf8) == str(user_id))
+                            # Выбираем только нужные колонки для ускорения (только те, что есть)
+                            .select(select_cols)
+                        )
+                        
+                        # Проверяем тип timestamp перед сортировкой
+                        timestamp_dtype = schema.get("timestamp")
+                        if timestamp_dtype == pl.Duration:
+                            # Если timestamp в формате Duration, пропускаем сортировку
+                            # Просто берем первые 100 строк
+                            print("⚠ Timestamp в формате Duration, пропускаем сортировку")
+                            user_marketplace = user_marketplace_lazy.limit(100).collect()
+                        else:
+                            # Ограничиваем количество событий для экономии памяти и токенов
+                            # Берем только последние 100 событий и агрегируем
+                            print("📅 Сортировка по timestamp...")
+                            user_marketplace = user_marketplace_lazy.sort("timestamp", descending=True).limit(100).collect()
+                        
+                        print(f"✅ Найдено {user_marketplace.height} событий marketplace для пользователя {user_id}")
+                        
+                        # Агрегируем данные: топ категории, топ товары
+                        if user_marketplace.height > 0:
+                            # Группируем по категориям и товарам для упрощения
+                            # Выбираем только существующие колонки
+                            select_cols_final = ["timestamp", "item_id", "domain"]
+                            if "category_id" in user_marketplace.columns:
+                                select_cols_final.append("category_id")
+                            if "category" in user_marketplace.columns:
+                                select_cols_final.append("category")
+                            
+                            user_marketplace = user_marketplace.select(select_cols_final).head(50)  # Ограничиваем до 50 самых свежих событий
                 else:
                     user_marketplace = pl.DataFrame()
             else:
@@ -440,9 +441,13 @@ def process_user(
                     
                     if user_payments.height > 0:
                         # Агрегируем: сумма по брендам
-                        user_payments = user_payments.select([
-                            "timestamp", "brand_id", "amount", "domain"
-                        ]).head(30)  # Ограничиваем до 30 самых свежих платежей
+                        # Выбираем только существующие колонки
+                        payment_select_cols = []
+                        for col in ["timestamp", "brand_id", "amount", "domain"]:
+                            if col in user_payments.columns:
+                                payment_select_cols.append(col)
+                        if payment_select_cols:
+                            user_payments = user_payments.select(payment_select_cols).head(30)  # Ограничиваем до 30 самых свежих платежей
                 else:
                     user_payments = pl.DataFrame()
             else:
@@ -487,6 +492,18 @@ def process_user(
                     else:
                         user_receipts = user_receipts_lazy.sort("timestamp", descending=True).limit(50).collect()
                     print(f"✅ Найдено {user_receipts.height} чеков для пользователя {user_id}")
+                    
+                    # Исправляем обработку receipts: price * count = amount
+                    if user_receipts.height > 0:
+                        if "price" in user_receipts.columns and "count" in user_receipts.columns:
+                            # Умножаем price * count для получения общей суммы
+                            user_receipts = user_receipts.with_columns(
+                                (pl.col("price") * pl.col("count")).alias("amount")
+                            )
+                            print(f"   ✅ Receipts: price умножен на count для {user_receipts.height} записей")
+                        elif "price" in user_receipts.columns and "amount" not in user_receipts.columns:
+                            # Если нет count, используем price как amount
+                            user_receipts = user_receipts.with_columns(pl.col("price").alias("amount"))
         except Exception as e:
             print(f"⚠ Ошибка при загрузке payments receipts: {e}")
             user_receipts = pl.DataFrame()
@@ -590,6 +607,11 @@ def process_user(
             import traceback
             print(f"   Детали: {traceback.format_exc()}")
         
+        # ВАЖНО: Обогащаем события категориями из каталогов ПЕРЕД созданием профиля
+        # Это критично для правильного определения категорий в профиле пользователя
+        print(f"🔍 Обогащение событий категориями из каталогов items.pq...")
+        print(f"   📦 Доступные каталоги: {list(items_catalog.keys()) if items_catalog else 'нет'}")
+        
         # Обогащаем события категориями из каталогов
         # Определяем тип товаров по префиксу item_id для выбора правильного каталога
         if items_catalog and user_marketplace.height > 0 and "item_id" in user_marketplace.columns:
@@ -600,21 +622,41 @@ def process_user(
                 # Пробуем обогатить из обоих каталогов (retail и marketplace)
                 # Сначала пробуем retail_items для товаров с префиксом nfmcg_
                 retail_enriched = False
+                
+                print(f"   📦 Проверка каталогов для обогащения...")
+                print(f"   📊 Событий marketplace: {user_marketplace.height}")
+                if user_marketplace.height > 0:
+                    sample_item_ids = user_marketplace.select(["item_id"]).head(3)["item_id"].to_list()
+                    print(f"   📋 Примеры item_id в событиях: {sample_item_ids}")
+                
                 if "retail" in items_catalog:
                     retail_items = items_catalog.get("retail")
+                    print(f"   📦 Retail каталог: {retail_items.height if retail_items is not None else 0} товаров")
                     if retail_items is not None and retail_items.height > 0 and "item_id" in retail_items.columns:
                         category_col = "category" if "category" in retail_items.columns else "category_id"
                         if category_col in retail_items.columns:
+                            print(f"   🔍 Пробуем обогатить из retail каталога (колонка: {category_col})...")
+                            # Нормализуем item_id для корректного join (приводим к строке)
+                            retail_items_normalized = retail_items.with_columns(
+                                pl.col("item_id").cast(pl.Utf8, strict=False).alias("item_id")
+                            )
+                            user_marketplace_normalized = user_marketplace.with_columns(
+                                pl.col("item_id").cast(pl.Utf8, strict=False).alias("item_id")
+                            )
+                            
                             # Объединяем с retail каталогом
-                            user_marketplace = user_marketplace.join(
-                                retail_items.select(["item_id", category_col, "subcategory"] if "subcategory" in retail_items.columns else ["item_id", category_col]),
+                            user_marketplace_normalized = user_marketplace_normalized.join(
+                                retail_items_normalized.select(["item_id", category_col, "subcategory"] if "subcategory" in retail_items_normalized.columns else ["item_id", category_col]),
                                 on="item_id",
                                 how="left"
                             )
+                            user_marketplace = user_marketplace_normalized
                             enriched_count = user_marketplace.filter(pl.col(category_col).is_not_null()).height
                             if enriched_count > 0:
                                 print(f"✅ Обогащено {enriched_count} событий marketplace категориями из retail_items")
                                 retail_enriched = True
+                            else:
+                                print(f"   ⚠ Retail join не дал результатов. Проверьте совпадение item_id")
                 
                 # Затем пробуем marketplace_items для товаров, которые не обогатились
                 if "marketplace" in items_catalog:
@@ -627,8 +669,16 @@ def process_user(
                             
                             if current_category_col is None or user_marketplace.filter(pl.col(current_category_col).is_not_null()).height < user_marketplace.height:
                                 # Если категорий нет или не все события обогащены, пробуем marketplace
-                                user_marketplace = user_marketplace.join(
-                                    mp_items.select(["item_id", category_col, "subcategory"] if "subcategory" in mp_items.columns else ["item_id", category_col]),
+                                print(f"   🔍 Пробуем обогатить из marketplace каталога (колонка: {category_col})...")
+                                # Нормализуем item_id для корректного join (приводим к строке)
+                                mp_items_for_join = mp_items.with_columns(
+                                    pl.col("item_id").cast(pl.Utf8, strict=False).alias("item_id")
+                                )
+                                user_marketplace_for_join = user_marketplace.with_columns(
+                                    pl.col("item_id").cast(pl.Utf8, strict=False).alias("item_id")
+                                )
+                                user_marketplace = user_marketplace_for_join.join(
+                                    mp_items_for_join.select(["item_id", category_col, "subcategory"] if "subcategory" in mp_items_for_join.columns else ["item_id", category_col]),
                                     on="item_id",
                                     how="left",
                                     suffix="_mp"
@@ -647,6 +697,28 @@ def process_user(
                                 enriched_count = user_marketplace.filter(pl.col(final_category_col).is_not_null()).height
                                 if enriched_count > 0 and not retail_enriched:
                                     print(f"✅ Обогащено {enriched_count} событий marketplace категориями из marketplace_items")
+                        
+                        # Диагностика: проверяем итоговые категории
+                        final_cat_col = "category" if "category" in user_marketplace.columns else ("category_id" if "category_id" in user_marketplace.columns else None)
+                        if final_cat_col:
+                            total_enriched = user_marketplace.filter(pl.col(final_cat_col).is_not_null()).height
+                            if total_enriched > 0:
+                                print(f"   📊 ИТОГО обогащено категориями: {total_enriched} из {user_marketplace.height} событий marketplace")
+                                # Показываем примеры категорий
+                                sample_cats = user_marketplace.filter(pl.col(final_cat_col).is_not_null()).select([final_cat_col]).unique().head(5)
+                                if sample_cats.height > 0:
+                                    print(f"   📋 Примеры категорий: {sample_cats[final_cat_col].to_list()}")
+                            else:
+                                print(f"   ⚠ ВНИМАНИЕ: Ни одно событие marketplace не обогащено категориями!")
+                                print(f"   Проверьте: есть ли item_id в событиях ({user_marketplace.height} событий) и в каталогах, совпадают ли они")
+                                if user_marketplace.height > 0:
+                                    sample_item_ids = user_marketplace.select(["item_id"]).head(5)["item_id"].to_list()
+                                    print(f"   Примеры item_id в событиях: {sample_item_ids}")
+                                    # Проверяем каталоги
+                                    for cat_name, cat_df in items_catalog.items():
+                                        if cat_df.height > 0 and "item_id" in cat_df.columns:
+                                            sample_cat_items = cat_df.select(["item_id"]).head(5)["item_id"].to_list()
+                                            print(f"   Примеры item_id в каталоге {cat_name}: {sample_cat_items}")
             except Exception as e:
                 print(f"⚠ Ошибка при обогащении marketplace категориями: {e}")
                 import traceback
@@ -728,6 +800,13 @@ def process_user(
                     use_lazy=True,
                     include_embedding=False
                 )
+                # Загружаем payments/items.pq для поиска категорий по brand_id
+                brand_items_payments_lazy = loader.load_payments_items(
+                    brand_ids=user_brand_ids_normalized,
+                    item_ids=None,
+                    use_lazy=True,
+                    include_embedding=False
+                )
                 
                 # Проверяем, что загрузка прошла успешно
                 if brand_items_marketplace_lazy is None:
@@ -747,6 +826,15 @@ def process_user(
                         print(f"   ✅ Retail items schema: {list(schema.keys())}")
                     except:
                         print(f"   ⚠ Не удалось получить schema для retail items")
+                
+                if brand_items_payments_lazy is None:
+                    print(f"   ⚠ Payments items lazy frame = None (возможно, файл не найден)")
+                else:
+                    try:
+                        schema = brand_items_payments_lazy.collect_schema()
+                        print(f"   ✅ Payments items schema: {list(schema.keys())}")
+                    except:
+                        print(f"   ⚠ Не удалось получить schema для payments items")
                 
                 # Добавляем в items_catalog или обновляем существующие
                 if brand_items_marketplace_lazy is not None:
@@ -818,6 +906,49 @@ def process_user(
                                 pass
                     except Exception as e:
                         print(f"   ⚠ Ошибка при загрузке retail товаров для брендов: {e}")
+                        import traceback
+                        print(f"   Детали: {traceback.format_exc()}")
+                
+                # Обрабатываем payments/items.pq для поиска категорий по brand_id
+                if brand_items_payments_lazy is not None:
+                    try:
+                        brand_payments_items = brand_items_payments_lazy.limit(1000).collect()
+                        if brand_payments_items.height > 0:
+                            # Проверяем наличие категорий в загруженных товарах
+                            has_category_col = any(col.lower() in ["category", "category_id"] for col in brand_payments_items.columns)
+                            if has_category_col:
+                                category_col = [col for col in brand_payments_items.columns if col.lower() in ["category", "category_id"]][0]
+                                non_null_categories = brand_payments_items.filter(pl.col(category_col).is_not_null()).height
+                                print(f"   📊 Payments: {brand_payments_items.height} товаров, {non_null_categories} с категориями")
+                            
+                            # Извлекаем категории брендов из payments/items.pq
+                            if "brand_id" in brand_payments_items.columns and has_category_col:
+                                # Группируем по brand_id и берем самую частую категорию
+                                brand_category_mapping = brand_payments_items.filter(
+                                    pl.col("brand_id").is_not_null() & pl.col(category_col).is_not_null()
+                                ).group_by("brand_id").agg([
+                                    pl.col(category_col).mode().first().alias("category")
+                                ])
+                                
+                                # Добавляем в brands_categories_map
+                                for row in brand_category_mapping.iter_rows(named=True):
+                                    brand_id = str(row["brand_id"]).replace(".0", "")
+                                    category = row["category"]
+                                    if brand_id and category:
+                                        brands_categories_map[brand_id] = category
+                                        # Убираем избыточный лог для каждого бренда - слишком много
+                            
+                            if "payments" in items_catalog:
+                                # Объединяем с существующими
+                                items_catalog["payments"] = pl.concat([items_catalog["payments"], brand_payments_items]).unique(subset=["item_id"], keep="first")
+                                print(f"   ✅ Обновлен payments каталог: добавлено товаров для брендов пользователя")
+                            else:
+                                items_catalog["payments"] = brand_payments_items
+                                print(f"   ✅ Загружен payments каталог: {brand_payments_items.height} товаров для брендов")
+                        else:
+                            print(f"   ⚠ Payments: не найдено товаров для брендов {user_brand_ids_normalized[:3]}...")
+                    except Exception as e:
+                        print(f"   ⚠ Ошибка при загрузке payments товаров для брендов: {e}")
                         import traceback
                         print(f"   Детали: {traceback.format_exc()}")
                         
@@ -919,7 +1050,7 @@ def process_user(
                                                 # Обновляем маппинг (перезаписываем если уже есть)
                                                 brands_categories_map[brand_id] = category
                                                 catalog_found_count += 1
-                                                print(f"      ✅ Бренд {brand_id}: категория '{category}' (найдено {row.get('item_count', 0)} товаров)")
+                                                # Убираем избыточный лог для каждого бренда
                                     
                                     print(f"   ✅ Извлечено категорий из {catalog_name}: {catalog_found_count} брендов")
                                 else:
@@ -942,7 +1073,12 @@ def process_user(
                     found_for_user = len([b for b in user_brand_ids_normalized if b in brands_categories_map])
                     print(f"✅ Всего категорий брендов для пользователя: {found_for_user} из {len(user_brand_ids_normalized)}")
                     if found_for_user > 0:
-                        print(f"   Примеры: {list(brands_categories_map.items())[:3]}")
+                        # Показываем разнообразие категорий
+                        unique_cats = set(brands_categories_map.values())
+                        if len(unique_cats) > 1:
+                            print(f"   Примеры категорий: {list(unique_cats)[:3]}")
+                        else:
+                            print(f"   Категория всех брендов: {list(unique_cats)[0] if unique_cats else 'не определена'}")
                     if found_for_user < len(user_brand_ids_normalized):
                         missing = [b for b in user_brand_ids_normalized if b not in brands_categories_map]
                         print(f"   ⚠ Не найдено категорий для брендов: {missing}")
@@ -1220,7 +1356,6 @@ def process_user(
     # (логика определения топ категории бренда уже внутри create_user_profile)
     if not profile.get("top_category") and profile.get("top_brand_category"):
         profile["top_category"] = profile["top_brand_category"]
-        print(f"   ℹ Использована категория бренда как топ-категория профиля")
     
     print(f"✅ Профиль создан")
     
@@ -1253,7 +1388,48 @@ def process_user(
     # Объединяем рекомендации с нормализацией оценок
     all_recommendations = {}
     
-    # Добавляем ML рекомендации (score уже нормализован 0-1)
+    # ПРИОРИТЕТ 1: Рекомендации из анализа графа через YandexGPT (основной источник)
+    if graph_analysis and graph_analysis.get("recommended_product"):
+        graph_product = graph_analysis["recommended_product"]
+        graph_reason = graph_analysis.get("reason") or graph_analysis.get("analysis") or "На основе анализа графа поведения"
+        
+        print(f"🎯 Основная рекомендация из анализа графа: {graph_product}")
+        
+        all_recommendations[graph_product] = {
+            "product": graph_product,
+            "graph_score": 1.0,  # Максимальный приоритет для анализа графа
+            "ml_score": 0.0,
+            "rule_score": 0.0,
+            "source": "Анализ графа (YandexGPT)",
+            "reason": graph_reason,
+            "sources": ["Анализ графа (YandexGPT)"]
+        }
+    
+    # ПРИОРИТЕТ 2: Рекомендации из правил графа (если есть)
+    if graph_rules:
+        for rule in graph_rules:
+            product = rule.get("product")
+            reason = rule.get("reason", "На основе анализа паттернов графа")
+            
+            if product:
+                if product not in all_recommendations:
+                    all_recommendations[product] = {
+                        "product": product,
+                        "graph_score": 0.0,
+                        "ml_score": 0.0,
+                        "rule_score": 0.8,  # Высокий приоритет для правил графа
+                        "source": "Правила графа",
+                        "reason": reason,
+                        "sources": ["Правила графа"]
+                    }
+                else:
+                    # Усиливаем существующую рекомендацию
+                    all_recommendations[product]["rule_score"] = max(
+                        all_recommendations[product]["rule_score"], 0.8
+                    )
+                    all_recommendations[product]["sources"].append("Правила графа")
+    
+    # ПРИОРИТЕТ 3: ML рекомендации (дополняют анализ графа)
     for rec in ml_recommendations:
         product = rec["product"]
         ml_score = float(rec["score"])  # ML: 0-1
@@ -1268,24 +1444,25 @@ def process_user(
             
             all_recommendations[product] = {
                 "product": product,
+                "graph_score": 0.0,
                 "ml_score": ml_score,
                 "rule_score": 0.0,
-                "source": "ML модель",
+                "source": "Fallback (правила)",
                 "reason": reason,
-                "sources": ["ML модель"]
+                "sources": ["Fallback (правила)"]
             }
         else:
-            # Обновляем ML оценку если уже есть от правил
+            # Обновляем ML оценку если уже есть от графа/правил
             all_recommendations[product]["ml_score"] = ml_score
-            all_recommendations[product]["sources"].append("ML модель")
+            all_recommendations[product]["sources"].append("Fallback (правила)")
     
-    # Добавляем рекомендации по правилам (нормализуем score 1-3 -> 0-1)
+    # ПРИОРИТЕТ 4: Рекомендации по правилам паттернов (дополняют)
     for rec in rule_recommendations[:top_k]:
         product = rec["product"]
         rule_score_raw = rec["score"]  # Правила: 1-3 (confidence)
         
-        # Нормализуем оценку правил: 1-3 -> 0-0.7 (чтобы ML модель была приоритетнее)
-        rule_score_normalized = (rule_score_raw - 1) / 2.0 * 0.7  # (1->0, 2->0.35, 3->0.7)
+        # Нормализуем оценку правил: 1-3 -> 0-0.6 (ниже графа и ML)
+        rule_score_normalized = (rule_score_raw - 1) / 2.0 * 0.6  # (1->0, 2->0.3, 3->0.6)
         
         if product not in all_recommendations:
             # Берем лучшее объяснение из правил
@@ -1299,6 +1476,7 @@ def process_user(
             
             all_recommendations[product] = {
                 "product": product,
+                "graph_score": 0.0,
                 "ml_score": 0.0,
                 "rule_score": rule_score_normalized,
                 "source": "Правила",
@@ -1306,38 +1484,49 @@ def process_user(
                 "sources": ["Правила"]
             }
         else:
-            # Объединяем с ML рекомендацией
-            all_recommendations[product]["rule_score"] = rule_score_normalized
+            # Объединяем с существующей рекомендацией (усиливаем только если нет графа)
+            if all_recommendations[product]["graph_score"] == 0:
+                all_recommendations[product]["rule_score"] = max(
+                    all_recommendations[product]["rule_score"], 
+                    rule_score_normalized
+                )
             all_recommendations[product]["sources"].append("Правила")
-            # Если есть правило, предпочитаем его объяснение
-            if rec["reasons"]:
-                all_recommendations[product]["reason"] = rec["reasons"][0]["reason"]
     
-    # Объединяем оценки: ML модель (0-1) + Правила (0-0.7) = общая оценка (0-1.7, но нормализуем до 1.0)
+    # Объединяем оценки: Граф (приоритет 1.0) > ML (0-1) > Правила (0-0.8)
     final_list = []
     for product, rec_data in all_recommendations.items():
-        # Комбинированная оценка: 70% ML + 30% Правила
-        combined_score = rec_data["ml_score"] * 0.7 + rec_data["rule_score"] * 0.3
+        graph_score = rec_data.get("graph_score", 0.0)
+        ml_score = rec_data.get("ml_score", 0.0)
+        rule_score = rec_data.get("rule_score", 0.0)
+        
+        # Если есть рекомендация из анализа графа - она приоритетна
+        if graph_score > 0:
+            combined_score = graph_score  # Максимальный приоритет
+        else:
+            # Комбинированная оценка: 60% ML + 40% Правила (если нет графа)
+            combined_score = ml_score * 0.6 + rule_score * 0.4
         
         # Определяем источник
-        if rec_data["ml_score"] > 0 and rec_data["rule_score"] > 0:
-            source = "ML модель + Правила"
-        elif rec_data["ml_score"] > 0:
-            source = "ML модель"
+        sources = rec_data.get("sources", [])
+        if len(sources) > 1:
+            source = " + ".join(sources)
+        elif sources:
+            source = sources[0]
         else:
-            source = "Правила"
+            source = "Неизвестный источник"
         
         final_list.append({
             "product": product,
             "score": combined_score,
-            "ml_score": rec_data["ml_score"],
-            "rule_score": rec_data["rule_score"],
+            "graph_score": graph_score,
+            "ml_score": ml_score,
+            "rule_score": rule_score,
             "source": source,
             "reason": rec_data["reason"]
         })
     
-    # Сортируем и берем топ-K
-    final_list.sort(key=lambda x: x["score"], reverse=True)
+    # Сортируем и берем топ-K (рекомендации из графа всегда на первом месте)
+    final_list.sort(key=lambda x: (x["graph_score"], x["score"]), reverse=True)
     final_recommendations = final_list[:top_k]
     
     print(f"📊 Финальная статистика:")
