@@ -993,9 +993,6 @@ class NBOModel:
                 is_food_category = is_food_category or check_category(top_brand_category, CATEGORY_KEYWORDS.get("food", []))
                 is_retail_category = is_retail_category or check_category(top_brand_category, CATEGORY_KEYWORDS.get("retail", []))
         
-        # ФИНАЛЬНАЯ ПРОВЕРКА: Если категория еды - ВСЕ ипотеки = 0
-        if is_food_category:
-        
         # Сильные сигналы для ипотеки (только явные признаки недвижимости)
         # 1. Явные категории недвижимости/ремонта (самый сильный сигнал)
         real_estate_signal = 0.0

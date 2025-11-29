@@ -1447,14 +1447,16 @@ def process_user(
                 "graph_score": 0.0,
                 "ml_score": ml_score,
                 "rule_score": 0.0,
-                "source": "Fallback (правила)",
+                "source": "ML модель",
                 "reason": reason,
-                "sources": ["Fallback (правила)"]
+                "sources": ["ML модель"]
             }
         else:
             # Обновляем ML оценку если уже есть от графа/правил
             all_recommendations[product]["ml_score"] = ml_score
-            all_recommendations[product]["sources"].append("Fallback (правила)")
+            # Если уже есть "ML модель" в источниках, не добавляем дубликат
+            if "ML модель" not in all_recommendations[product]["sources"]:
+                all_recommendations[product]["sources"].append("ML модель")
     
     # ПРИОРИТЕТ 4: Рекомендации по правилам паттернов (дополняют)
     for rec in rule_recommendations[:top_k]:
@@ -1506,12 +1508,37 @@ def process_user(
             # Комбинированная оценка: 60% ML + 40% Правила (если нет графа)
             combined_score = ml_score * 0.6 + rule_score * 0.4
         
-        # Определяем источник
+        # Определяем источник - упрощенная логика без дублирования
         sources = rec_data.get("sources", [])
-        if len(sources) > 1:
-            source = " + ".join(sources)
-        elif sources:
-            source = sources[0]
+        # Нормализуем источники: заменяем "Fallback (правила)" на "ML модель"
+        normalized_sources = []
+        for s in sources:
+            if s == "Fallback (правила)":
+                normalized_sources.append("ML модель")
+            elif s not in normalized_sources:  # Избегаем дубликатов
+                normalized_sources.append(s)
+        
+        # Формируем итоговый источник
+        if len(normalized_sources) > 1:
+            # Сокращаем названия для компактности
+            simplified = []
+            for s in normalized_sources:
+                if s == "ML модель":
+                    simplified.append("ML")
+                elif s == "Правила":
+                    simplified.append("Правила")
+                elif s == "Правила графа":
+                    simplified.append("Граф")
+                else:
+                    simplified.append(s)
+            source = " + ".join(simplified)
+        elif normalized_sources:
+            # Если один источник, показываем полное название, но без "модель" если это просто "ML"
+            s = normalized_sources[0]
+            if s == "ML модель":
+                source = "ML модель"
+            else:
+                source = s
         else:
             source = "Неизвестный источник"
         

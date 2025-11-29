@@ -777,27 +777,28 @@ if 'result' in st.session_state:
                     directed=True
                 )
                 
-                # Настройки физики для красивого отображения
+                # Настройки физики для более тонкого и легкого отображения
                 net.set_options("""
                 {
                     "physics": {
                         "enabled": true,
                         "stabilization": {"iterations": 100},
                         "barnesHut": {
-                            "gravitationalConstant": -2000,
-                            "centralGravity": 0.1,
-                            "springLength": 200,
-                            "springConstant": 0.05
+                            "gravitationalConstant": -1000,
+                            "centralGravity": 0.05,
+                            "springLength": 150,
+                            "springConstant": 0.03,
+                            "avoidOverlap": 0.5
                         }
                     },
                     "nodes": {
-                        "font": {"size": 14, "color": "white"},
-                        "borderWidth": 2
+                        "font": {"size": 12, "color": "white"},
+                        "borderWidth": 1
                     },
                     "edges": {
-                        "arrows": {"to": {"enabled": true}},
-                        "font": {"size": 12, "color": "white"},
-                        "smooth": {"type": "continuous"}
+                        "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}},
+                        "font": {"size": 10, "color": "white"},
+                        "smooth": {"type": "continuous", "roundness": 0.3}
                     }
                 }
                 """)
@@ -838,9 +839,9 @@ if 'result' in st.session_state:
                     elif node_label == 'START':
                         node_label = 'СТАРТ'
                     
-                    # Размер узла зависит от степени (количества связей)
+                    # Размер узла зависит от степени (количества связей) - уменьшено для более тонкого графа
                     degree = graph_to_visualize.degree(node)
-                    size = 20 + min(degree * 5, 50)  # От 20 до 70
+                    size = 15 + min(degree * 3, 30)  # От 15 до 45 (было 20-70)
                     
                     # Формируем подсказку
                     tooltip = f"Тип: {node_type}\nСвязей: {degree}"
@@ -863,11 +864,11 @@ if 'result' in st.session_state:
                         title=tooltip
                     )
                 
-                # Добавляем рёбра с весами
+                # Добавляем рёбра с весами - уменьшена толщина для более тонкого графа
                 for u, v, data in graph_to_visualize.edges(data=True):
                     weight = data.get('weight', 1)
-                    # Толщина ребра зависит от веса
-                    width = 1 + min(weight * 2, 5)
+                    # Толщина ребра зависит от веса - уменьшено
+                    width = 0.5 + min(weight * 1, 2)  # От 0.5 до 2.5 (было 1-5)
                     
                     net.add_edge(
                         str(u),
