@@ -707,41 +707,47 @@ def process_user(
     
     # Создание профиля пользователя
     print(f"👤 Создание профиля пользователя...")
+    
+    # Объединяем items_catalog с items_with_embeddings для передачи в create_user_profile
+    # items_catalog содержит категории, items_with_embeddings - embedding (если загружены)
+    all_items_for_profile = {}
+    if items_catalog:
+        all_items_for_profile.update(items_catalog)
+    if items_with_embeddings:
+        # Если embedding уже загружены, объединяем с каталогами
+        for catalog_name, items_df in items_with_embeddings.items():
+            if catalog_name in all_items_for_profile:
+                # Объединяем: берем категории из items_catalog, embedding из items_with_embeddings
+                catalog_df = all_items_for_profile[catalog_name]
+                if "item_id" in catalog_df.columns and "item_id" in items_df.columns:
+                    # Объединяем по item_id, добавляя embedding
+                    if "embedding" in items_df.columns:
+                        all_items_for_profile[catalog_name] = catalog_df.join(
+                            items_df.select(["item_id", "embedding"]),
+                            on="item_id",
+                            how="left"
+                        )
+            else:
+                all_items_for_profile[catalog_name] = items_df
+    
+    # Если items_catalog пуст, но items_with_embeddings есть, используем их
+    if not all_items_for_profile and items_with_embeddings:
+        all_items_for_profile = items_with_embeddings
+    
     profile = create_user_profile(
         user_events=user_events,
         patterns=patterns,
         user_id=user_id,
-        items_with_embeddings=items_with_embeddings,
-        item_to_brand_map=item_to_brand_map
+        items_with_embeddings=all_items_for_profile if all_items_for_profile else None,
+        item_to_brand_map=item_to_brand_map,
+        brands_categories_map=brands_categories_map
     )
     
-    # Добавляем категории брендов в профиль на основе маппинга
-    if brands_categories_map and profile.get("brand_ids"):
-        brand_categories = []
-        for brand_id in profile.get("brand_ids", []):
-            category = brands_categories_map.get(str(brand_id))
-            if category:
-                brand_categories.append(category)
-        
-        if brand_categories:
-            # Топ категория брендов (самая частая)
-            from collections import Counter
-            category_counts = Counter(brand_categories)
-            top_brand_category = category_counts.most_common(1)[0][0] if category_counts else None
-            profile["top_brand_category"] = top_brand_category
-            profile["brand_categories"] = list(set(brand_categories))  # Уникальные категории
-            print(f"✅ Найдено {len(set(brand_categories))} категорий брендов, топ: {top_brand_category}")
-            
-            # Fallback: Если топ-категория по товарам не определена, используем категорию бренда
-            if not profile.get("top_category") and top_brand_category:
-                profile["top_category"] = top_brand_category
-                print(f"   ℹ Использована категория бренда как топ-категория профиля")
-        else:
-            profile["top_brand_category"] = None
-            profile["brand_categories"] = []
-    else:
-        profile["top_brand_category"] = None
-        profile["brand_categories"] = []
+    # Fallback: Если топ-категория по товарам не определена, используем категорию бренда
+    # (логика определения топ категории бренда уже внутри create_user_profile)
+    if not profile.get("top_category") and profile.get("top_brand_category"):
+        profile["top_category"] = profile["top_brand_category"]
+        print(f"   ℹ Использована категория бренда как топ-категория профиля")
     
     print(f"✅ Профиль создан")
     

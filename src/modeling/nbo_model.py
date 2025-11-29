@@ -7,6 +7,7 @@
 import joblib
 from pathlib import Path
 from typing import Dict, List, Optional
+from collections import defaultdict
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
@@ -41,7 +42,16 @@ class NBOModel:
                 random_state=42
             )
             self.scaler = StandardScaler()
-            self.products = ["Ипотека", "Кредитная карта", "Вклад", "Кредит", "Дебетовая карта"]
+            # Используем полный список конкретных продуктов ПСБ
+            self.products = [
+                "Семейная ипотека",
+                "Ипотека «Вторичное жилье»",
+                "Ипотека «Новостройка»",
+                "Кредитная карта «100+»",
+                "Вклад «Сильная ставка»",
+                "Кредит на любые цели",
+                "Дебетовая карта «Твой кэшбэк»"
+            ]
     
     def load_model(self) -> None:
         """Загружает модель из файла."""
@@ -49,12 +59,126 @@ class NBOModel:
             data = joblib.load(self.model_path)
             self.model = data["model"]
             self.scaler = data.get("scaler")
-            self.products = data.get("products", ["Ипотека", "Кредитная карта", "Вклад", "Кредит"])
+            self.products = data.get("products", [
+                "Семейная ипотека",
+                "Ипотека «Вторичное жилье»",
+                "Ипотека «Новостройка»",
+                "Госпрограмма «Новые субъекты»",
+                "Семейная военная ипотека",
+                "Военная ипотека",
+                "Военная ипотека «Новые субъекты»",
+                "Дальневосточная и арктическая ипотека",
+                "Кредит под залог квартиры",
+                "Рефинансирование ипотеки",
+                "Военная ипотека (Рефинансирование)",
+                "МультиЮрист",
+                "Защита вклада",
+                "Универсальная защита",
+                "Домашний кэшбэк",
+                "На всякий случай",
+                "Автопомощь на дорогах",
+                "Будьте здоровы",
+                "Моя территория",
+                "Страхование путешественников",
+                "Проверка недвижимости",
+                "ОСАГО",
+                "Страхование от потери работы",
+                "Приемка первичного жилья",
+                "Накопительное страхование жизни",
+                "Страхование заемщиков кредитов",
+                "Страхование ипотечных заемщиков",
+                "Кредитная карта «100+»", 
+                "Кредитная карта «180 дней без %»",
+                "Вклад «Сильная ставка»", 
+                "Вклад «Ставка на будущее»",
+                "Вклад «Драгоценный»",
+                "Вклад «Мой доход»",
+                "Вклад «Стабильный доход»",
+                "Вклад «Моя копилка»",
+                "Вклад «Мои возможности»",
+                "Вклад «В юанях»",
+                "Вклад «Социальный вклад»",
+                "Кредит на любые цели",
+                "Рефинансирование кредитов",
+                "Экспресс-кредит «Турбоденьги»",
+                "Кредит для работников ОПК и военнослужащих",
+                "Дебетовая карта «Твой кэшбэк»",
+                "Дебетовая карта «Только вперед»",
+                "Накопительный счет «Акцент»",
+                "Накопительный счет «Про запас»",
+                "Накопительный счет «Хранитель»",
+                "ПСБ Инвестиции",
+                "Пакет «Orange Premium Club»",
+                "Клубная карта ПФК ЦСКА",
+                "Карта «СВОи»",
+                "Дебетовая пенсионная карта ПСБ",
+                "Зарплатная карта «Твой Плюс»",
+                "Зарплатная карта «Сильные люди»",
+                "Зарплатная карта «Зарплата PRO»",
+                "Карта жителя"
+            ])
         except Exception as e:
             print(f"Ошибка загрузки модели: {e}")
             self.model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
             self.scaler = StandardScaler()
-            self.products = ["Ипотека", "Кредитная карта", "Вклад", "Кредит"]
+            self.products = [
+                "Семейная ипотека",
+                "Ипотека «Вторичное жилье»",
+                "Ипотека «Новостройка»",
+                "Госпрограмма «Новые субъекты»",
+                "Семейная военная ипотека",
+                "Военная ипотека",
+                "Военная ипотека «Новые субъекты»",
+                "Дальневосточная и арктическая ипотека",
+                "Кредит под залог квартиры",
+                "Рефинансирование ипотеки",
+                "Военная ипотека (Рефинансирование)",
+                "МультиЮрист",
+                "Защита вклада",
+                "Универсальная защита",
+                "Домашний кэшбэк",
+                "На всякий случай",
+                "Автопомощь на дорогах",
+                "Будьте здоровы",
+                "Моя территория",
+                "Страхование путешественников",
+                "Проверка недвижимости",
+                "ОСАГО",
+                "Страхование от потери работы",
+                "Приемка первичного жилья",
+                "Накопительное страхование жизни",
+                "Страхование заемщиков кредитов",
+                "Страхование ипотечных заемщиков",
+                "Кредитная карта «100+»", 
+                "Кредитная карта «180 дней без %»",
+                "Вклад «Сильная ставка»", 
+                "Вклад «Ставка на будущее»",
+                "Вклад «Драгоценный»",
+                "Вклад «Мой доход»",
+                "Вклад «Стабильный доход»",
+                "Вклад «Моя копилка»",
+                "Вклад «Мои возможности»",
+                "Вклад «В юанях»",
+                "Вклад «Социальный вклад»",
+                "Кредит на любые цели",
+                "Рефинансирование кредитов",
+                "Экспресс-кредит «Турбоденьги»",
+                "Кредит для работников ОПК и военнослужащих",
+                "Дебетовая карта «Твой кэшбэк»",
+                "Дебетовая карта «Только вперед»",
+                "Накопительный счет «Акцент»",
+                "Накопительный счет «Про запас»",
+                "Накопительный счет «Хранитель»",
+                "ПСБ Инвестиции",
+                "Пакет «Orange Premium Club»",
+                "Клубная карта ПФК ЦСКА",
+                "Карта «СВОи»",
+                "Дебетовая пенсионная карта ПСБ",
+                "Зарплатная карта «Твой Плюс»",
+                "Зарплатная карта «Сильные люди»",
+                "Зарплатная карта «Зарплата PRO»",
+                "Карта жителя"
+            ]
     
     def save_model(self) -> None:
         """Сохраняет модель в файл."""
@@ -169,32 +293,48 @@ class NBOModel:
             cat_short = top_category[:15] if len(top_category) > 15 else top_category
             parts.append(f"К:{cat_short}")
         
-        prompt = "|".join(parts) + "|Продукт? (Ипотека/Кредитка/Вклад/Кредит/Дебет)"
+        # Используем конкретные продукты ПСБ в промпте
+        product_examples = "Ипотека/Кредитная карта «100+»/Вклад «Сильная ставка»/Кредит на любые цели/Дебетовая карта «Твой кэшбэк»"
+        prompt = "|".join(parts) + f"|Продукт ПСБ? ({product_examples})"
         
         try:
             response = call_yandex_gpt(
                 input_text=prompt,
-                instructions="Эксперт банковских продуктов. Профиль → продукт. Ответ: только название.",
+                instructions="Эксперт банковских продуктов ПСБ. Профиль → конкретный продукт ПСБ. Ответ: только название продукта из списка ПСБ.",
                 temperature=0.3
             )
             
             # Извлекаем название продукта из ответа
             response = response.strip()
             for product in self.products:
-                if product.lower() in response.lower():
+                # Проверяем как точное вхождение, так и частичное
+                if product.lower() in response.lower() or response.lower() in product.lower():
                     return product
             
-            # Если не нашли точное совпадение, возвращаем первый продукт
-            return self.products[0]
+            # Если не нашли точное совпадение, используем улучшенный fallback
+            # Сопоставляем по ключевым словам
+            response_lower = response.lower()
+            if any(kw in response_lower for kw in ["ипоте", "mortgage"]):
+                return "Семейная ипотека"
+            elif any(kw in response_lower for kw in ["кредитн", "credit card"]):
+                return "Кредитная карта «100+»"
+            elif any(kw in response_lower for kw in ["вклад", "deposit"]):
+                return "Вклад «Сильная ставка»"
+            elif any(kw in response_lower for kw in ["кредит", "loan"]):
+                return "Кредит на любые цели"
+            else:
+                return "Дебетовая карта «Твой кэшбэк»"
         except Exception as e:
             print(f"⚠ Ошибка при получении рекомендации от YandexGPT: {e}")
-            # Fallback на простую эвристику
-            if profile.get('total_tx', 0) > 100000:
-                return "Вклад"
-            elif profile.get('num_payments', 0) > 5:
-                return "Кредитная карта"
+            # Улучшенный fallback на конкретные продукты ПСБ
+            total_tx = profile.get('total_tx', 0)
+            num_payments = profile.get('num_payments', 0)
+            if total_tx > 100000:
+                return "Вклад «Сильная ставка»"
+            elif num_payments > 5:
+                return "Кредитная карта «100+»"
             else:
-                return "Дебетовая карта"
+                return "Дебетовая карта «Твой кэшбэк»"
     
     def _generate_synthetic_training_data(self, sample_profiles: List[Dict]) -> Dict:
         """
@@ -318,6 +458,34 @@ class NBOModel:
         """
         recommendations = []
         
+        # Константы для категорий (оптимизация - избегаем дублирования)
+        CATEGORY_KEYWORDS = {
+            "real_estate": ["недвижимость", "ремонт", "дом", "квартира", "строительство", "мебель", "интерьер", "сантехника"],
+            "retail": ["розничная", "торговля", "супермаркет", "магазин", "гипермаркет", "услуги", "развлечения", "ресторан", "кафе", "доставка", "еда"],
+            "finance": ["финансы", "инвестиции", "банк", "страхование", "брокер", "управление активами", "пенсионный", "накопительный"],
+            "auto": ["auto", "gas", "fuel", "car"],
+            "health": ["health", "medical", "pharmacy", "doctor", "sport", "gym"],
+            "travel": ["travel", "hotel", "airline"],
+            "sport": ["sport", "football", "soccer", "fitness", "gym"],
+            "tech": ["техника", "авто", "электроника", "бытовая техника"],
+            "property": ["house", "repair", "furniture", "renovation"]
+        }
+        
+        # Вспомогательная функция для проверки категорий
+        def check_category(category_str, keywords_list):
+            """Проверяет, содержит ли категория ключевые слова."""
+            if not category_str:
+                return False
+            cat_lower = str(category_str).lower()
+            return any(kw in cat_lower for kw in keywords_list)
+        
+        # Вспомогательная функция для подсчета совпадений в списке категорий
+        def count_category_matches(categories, keywords_list):
+            """Подсчитывает количество категорий, содержащих ключевые слова."""
+            if not categories:
+                return 0
+            return sum(1 for cat in categories if check_category(cat, keywords_list))
+        
         # Базовые метрики профиля
         num_payments = user_profile.get("num_payments", 0)
         total_tx = user_profile.get("total_tx", 0)
@@ -343,11 +511,37 @@ class NBOModel:
         # Использование embedding для улучшения рекомендаций (если доступен)
         embedding_diversity = user_profile.get("embedding_diversity", 0.0)
         # Высокое разнообразие embedding = разнообразные интересы = может нужен кредит для разных покупок
-        if embedding_diversity > 0.1:
-            loan_score += 0.15 * min(embedding_diversity, 1.0)
+        # ВАЖНО: loan_score будет определен позже, сохраняем для использования
+        embedding_loan_boost = 0.15 * min(embedding_diversity, 1.0) if embedding_diversity > 0.1 else 0.0
         
-        # Улучшенный анализ графа (если доступен)
-        graph_scores = {}
+        # Нормализация признаков ПЕРЕД анализом (оптимизация - вычисляем один раз)
+        # Используем относительные значения вместо абсолютных порогов
+        
+        # Константы для нормализации
+        NORM_TOTAL_TX = 200000.0
+        NORM_AVG_TX = 50000.0
+        NORM_PAYMENTS = 20.0
+        NORM_VIEWS = 50.0
+        NORM_ITEMS = 30.0
+        NORM_DAYS = 14.0
+        
+        # Нормализуем финансовые метрики (0-1 шкала)
+        max_tx_normalized = min(total_tx / NORM_TOTAL_TX, 1.0) if total_tx > 0 else 0.0
+        avg_tx_normalized = min(avg_tx / NORM_AVG_TX, 1.0) if avg_tx > 0 else 0.0
+        payment_frequency = min(num_payments / NORM_PAYMENTS, 1.0) if num_payments > 0 else 0.0
+        
+        # Нормализуем активность
+        activity_intensity = min(num_views / NORM_VIEWS, 1.0) if num_views > 0 else 0.0
+        diversity_score = min(unique_items / NORM_ITEMS, 1.0) if unique_items > 0 else 0.0
+        engagement_duration = min(days_active / NORM_DAYS, 1.0) if days_active > 0 else 0.0
+        
+        # Композитные индексы (комбинации признаков)
+        high_value_customer = (max_tx_normalized * 0.5 + avg_tx_normalized * 0.3 + payment_frequency * 0.2)
+        research_behavior = (activity_intensity * 0.4 + diversity_score * 0.4 + engagement_duration * 0.2)
+        active_spender = (payment_frequency * 0.5 + avg_tx_normalized * 0.3 + engagement_duration * 0.2)
+        
+        # Улучшенный анализ графа (если доступен) - используем defaultdict для оптимизации
+        graph_scores = defaultdict(float)
         if graph is not None:
             try:
                 import networkx as nx
@@ -386,26 +580,27 @@ class NBOModel:
                         
                         # Если доминируют бренды - активные платежи
                         if total_brand_importance > total_item_importance * 1.5:
-                            graph_scores["Кредитная карта"] = 0.4
-                            graph_scores["Вклад"] = 0.25
+                            graph_scores["Кредитная карта «100+»"] = 0.4
+                            graph_scores["Вклад «Сильная ставка»"] = 0.25
                             if len(brand_nodes) > 5:
-                                graph_scores["Вклад"] = 0.35  # Много разных брендов = накопления
+                                graph_scores["Вклад «Сильная ставка»"] = 0.35  # Много разных брендов = накопления
                         
                         # Если доминируют товары - активный просмотр/исследование
                         elif total_item_importance > total_brand_importance * 2:
-                            graph_scores["Ипотека"] = 0.3
-                            graph_scores["Кредит"] = 0.25
+                            graph_scores["Семейная ипотека"] = 0.3
+                            graph_scores["Кредит на любые цели"] = 0.25  # Исправлено название
                             if len(item_nodes) > 10:
-                                graph_scores["Ипотека"] = 0.4  # Много просмотров = крупная покупка
+                                graph_scores["Семейная ипотека"] = 0.4  # Много просмотров = крупная покупка
                         
-                        # Анализ категорий (если есть информация)
+                        # Анализ категорий (если есть информация) - оптимизировано с использованием констант
                         if category_weights:
                             top_categories = sorted(category_weights.items(), key=lambda x: x[1], reverse=True)[:3]
                             # Категории недвижимости/ремонта указывают на ипотеку
+                            real_estate_keywords = CATEGORY_KEYWORDS["real_estate"][:4]
                             for cat_id, weight in top_categories:
                                 cat_str = str(cat_id).lower()
-                                if any(keyword in cat_str for keyword in ["недвижимость", "ремонт", "дом", "квартира"]):
-                                    graph_scores["Ипотека"] = graph_scores.get("Ипотека", 0) + 0.2 * weight
+                                if any(keyword in cat_str for keyword in real_estate_keywords):
+                                    graph_scores["Семейная ипотека"] += 0.2 * weight
                                     break
                     except Exception as e:
                         print(f"⚠ Ошибка PageRank анализа: {e}")
@@ -432,12 +627,12 @@ class NBOModel:
                                     
                                     # Длинные пути = сложное поведение = крупные покупки
                                     if avg_path_length > 4 or max_path_length > 5:
-                                        graph_scores["Ипотека"] = graph_scores.get("Ипотека", 0) + 0.25
-                                        graph_scores["Кредит"] = graph_scores.get("Кредит", 0) + 0.2
+                                        graph_scores["Семейная ипотека"] += 0.25
+                                        graph_scores["Кредит на любые цели"] += 0.2  # Исправлено название
                                     
                                     # Много путей = активное исследование
                                     if len(path_lengths) > 15:
-                                        graph_scores["Ипотека"] = graph_scores.get("Ипотека", 0) + 0.15
+                                        graph_scores["Семейная ипотека"] += 0.15
                     except Exception as e:
                         print(f"⚠ Ошибка анализа путей: {e}")
                     
@@ -447,13 +642,13 @@ class NBOModel:
                         
                         # Высокая плотность = активное взаимодействие
                         if density > 0.3:
-                            graph_scores["Кредитная карта"] = graph_scores.get("Кредитная карта", 0) + 0.25
-                            graph_scores["Дебетовая карта"] = graph_scores.get("Дебетовая карта", 0) + 0.2
+                            graph_scores["Кредитная карта «100+»"] += 0.25
+                            graph_scores["Дебетовая карта «Твой кэшбэк»"] += 0.2
                         
                         # Низкая плотность, но много узлов = исследование разных вариантов
                         elif density < 0.2 and graph.number_of_nodes() > 10:
-                            graph_scores["Ипотека"] = graph_scores.get("Ипотека", 0) + 0.2
-                            graph_scores["Кредит"] = graph_scores.get("Кредит", 0) + 0.15
+                            graph_scores["Семейная ипотека"] += 0.2
+                            graph_scores["Кредит на любые цели"] += 0.15  # Исправлено название
                         
                         # Анализ степени узлов (средняя степень)
                         degrees = dict(graph.degree())
@@ -461,7 +656,7 @@ class NBOModel:
                             avg_degree = sum(degrees.values()) / len(degrees)
                             # Высокая средняя степень = активное взаимодействие
                             if avg_degree > 3:
-                                graph_scores["Кредитная карта"] = graph_scores.get("Кредитная карта", 0) + 0.2
+                                graph_scores["Кредитная карта «100+»"] += 0.2
                     except Exception as e:
                         print(f"⚠ Ошибка анализа плотности: {e}")
                     
@@ -474,16 +669,16 @@ class NBOModel:
                             
                             # Высокие веса = частые повторяющиеся действия
                             if avg_weight > 2 or max_weight > 5:
-                                graph_scores["Кредитная карта"] = graph_scores.get("Кредитная карта", 0) + 0.15
-                                graph_scores["Вклад"] = graph_scores.get("Вклад", 0) + 0.1
+                                graph_scores["Кредитная карта «100+»"] += 0.15
+                                graph_scores["Вклад «Сильная ставка»"] += 0.1
                     except Exception as e:
                         print(f"⚠ Ошибка анализа весов: {e}")
                         
             except Exception as e:
                 print(f"⚠ Ошибка анализа графа в fallback: {e}")
         
-        # Улучшенный анализ паттернов (если доступны)
-        pattern_scores = {}
+        # Улучшенный анализ паттернов (если доступны) - используем defaultdict для оптимизации
+        pattern_scores = defaultdict(float)
         if patterns:
             # Обрабатываем паттерны (могут быть строками или кортежами)
             pattern_strings = []
@@ -507,69 +702,51 @@ class NBOModel:
                 
                 # Доминирование платежей
                 if pay_ratio > 0.5:
-                    pattern_scores["Кредитная карта"] = 0.4
-                    pattern_scores["Вклад"] = 0.3
+                    pattern_scores["Кредитная карта «100+»"] = 0.4
+                    pattern_scores["Вклад «Сильная ставка»"] = 0.3
                     if pay_count > 5:
-                        pattern_scores["Вклад"] = 0.4  # Много платежей = накопления
+                        pattern_scores["Вклад «Сильная ставка»"] = 0.4  # Много платежей = накопления
                 
                 # Доминирование просмотров
                 elif view_ratio > 0.6:
-                    pattern_scores["Ипотека"] = 0.35
-                    pattern_scores["Кредит"] = 0.25
+                    pattern_scores["Семейная ипотека"] = 0.35
+                    pattern_scores["Кредит на любые цели"] = 0.25  # Исправлено название
                     if view_count > 10:
-                        pattern_scores["Ипотека"] = 0.45  # Много просмотров = исследование
+                        pattern_scores["Семейная ипотека"] = 0.45  # Много просмотров = исследование
                 
                 # Сбалансированное поведение
                 elif 0.3 < view_ratio < 0.6 and 0.2 < pay_ratio < 0.5:
-                    pattern_scores["Кредитная карта"] = 0.3
-                    pattern_scores["Ипотека"] = 0.25
+                    pattern_scores["Кредитная карта «100+»"] = 0.3
+                    pattern_scores["Семейная ипотека"] = 0.25
             
-            # 2. Анализ последовательностей (сложные паттерны)
+            # 2. Анализ последовательностей (сложные паттерны) - оптимизировано
             for pattern_str in pattern_strings:
                 # Паттерны исследования: V→V→V или V→V→P
                 if "V→V→V" in pattern_str or pattern_str.count("V") >= 3:
-                    pattern_scores["Ипотека"] = pattern_scores.get("Ипотека", 0) + 0.15
-                    pattern_scores["Кредит"] = pattern_scores.get("Кредит", 0) + 0.1
+                    pattern_scores["Семейная ипотека"] += 0.15
+                    pattern_scores["Кредит на любые цели"] += 0.1  # Исправлено название
                 
                 # Паттерны активных покупок: P→P→P или P→P→V
                 if "P→P→P" in pattern_str or (pattern_str.count("P") >= 3 and pay_ratio > 0.5):
-                    pattern_scores["Кредитная карта"] = pattern_scores.get("Кредитная карта", 0) + 0.2
-                    pattern_scores["Вклад"] = pattern_scores.get("Вклад", 0) + 0.15
+                    pattern_scores["Кредитная карта «100+»"] += 0.2
+                    pattern_scores["Вклад «Сильная ставка»"] += 0.15
                 
                 # Сложные паттерны принятия решений: V→P→V или P→V→P
                 if "V→P→V" in pattern_str or "P→V→P" in pattern_str:
-                    pattern_scores["Ипотека"] = pattern_scores.get("Ипотека", 0) + 0.2
-                    pattern_scores["Кредит"] = pattern_scores.get("Кредит", 0) + 0.15
+                    pattern_scores["Семейная ипотека"] += 0.2
+                    pattern_scores["Кредит на любые цели"] += 0.15  # Исправлено название
                 
                 # Паттерны быстрых решений: V→P (короткие паттерны)
                 if len(pattern_str.split("→")) <= 3 and "V" in pattern_str and "P" in pattern_str:
-                    pattern_scores["Кредитная карта"] = pattern_scores.get("Кредитная карта", 0) + 0.15
-                    pattern_scores["Дебетовая карта"] = pattern_scores.get("Дебетовая карта", 0) + 0.1
+                    pattern_scores["Кредитная карта «100+»"] += 0.15
+                    pattern_scores["Дебетовая карта «Твой кэшбэк»"] += 0.1
             
             # 3. Анализ разнообразия паттернов
             unique_patterns = len(set(pattern_strings))
             if unique_patterns > 5:
                 # Много разных паттернов = сложное поведение = крупные покупки
-                pattern_scores["Ипотека"] = pattern_scores.get("Ипотека", 0) + 0.1
-                pattern_scores["Кредит"] = pattern_scores.get("Кредит", 0) + 0.1
-        
-        # Нормализация признаков для более точных оценок
-        # Используем относительные значения вместо абсолютных порогов
-        
-        # Нормализуем финансовые метрики (0-1 шкала)
-        max_tx_normalized = min(total_tx / 200000.0, 1.0) if total_tx > 0 else 0.0  # Нормализуем до 200k
-        avg_tx_normalized = min(avg_tx / 50000.0, 1.0) if avg_tx > 0 else 0.0  # Нормализуем до 50k
-        payment_frequency = min(num_payments / 20.0, 1.0) if num_payments > 0 else 0.0  # Нормализуем до 20 платежей
-        
-        # Нормализуем активность
-        activity_intensity = min(num_views / 50.0, 1.0) if num_views > 0 else 0.0  # Нормализуем до 50 просмотров
-        diversity_score = min(unique_items / 30.0, 1.0) if unique_items > 0 else 0.0  # Нормализуем до 30 товаров
-        engagement_duration = min(days_active / 14.0, 1.0) if days_active > 0 else 0.0  # Нормализуем до 14 дней
-        
-        # Композитные индексы (комбинации признаков)
-        high_value_customer = (max_tx_normalized * 0.5 + avg_tx_normalized * 0.3 + payment_frequency * 0.2)
-        research_behavior = (activity_intensity * 0.4 + diversity_score * 0.4 + engagement_duration * 0.2)
-        active_spender = (payment_frequency * 0.5 + avg_tx_normalized * 0.3 + engagement_duration * 0.2)
+                pattern_scores["Семейная ипотека"] += 0.1
+                pattern_scores["Кредит на любые цели"] += 0.1  # Исправлено название
         
         # Базовые оценки на основе профиля с улучшенными правилами
         base_scores = {}
@@ -582,29 +759,21 @@ class NBOModel:
         if high_value_customer > 0.4 and research_behavior > 0.5:
             mortgage_score += 0.35
         
-        # 1.1. Retail заказы в категориях недвижимости/ремонта
-        if num_retail_orders > 0 and top_category:
-            cat_lower = str(top_category).lower()
-            if any(kw in cat_lower for kw in ["недвижимость", "ремонт", "строительство", "мебель"]):
-                mortgage_score += 0.25
+        # 1.1. Retail заказы в категориях недвижимости/ремонта - оптимизировано
+        if num_retail_orders > 0 and check_category(top_category, CATEGORY_KEYWORDS["real_estate"][:4]):
+            mortgage_score += 0.25
         
-        # 2. Категории недвижимости/ремонта (сильный сигнал)
+        # 2. Категории недвижимости/ремонта (сильный сигнал) - оптимизировано
         real_estate_signal = 0.0
-        if top_category:
-            cat_lower = str(top_category).lower()
-            if any(kw in cat_lower for kw in ["недвижимость", "ремонт", "дом", "квартира", "строительство"]):
-                real_estate_signal += 0.3
+        if check_category(top_category, CATEGORY_KEYWORDS["real_estate"][:5]):
+            real_estate_signal += 0.3
         
-        if top_brand_category:
-            brand_cat_lower = str(top_brand_category).lower()
-            if any(kw in brand_cat_lower for kw in ["недвижимость", "ремонт", "строительство", "мебель", "интерьер", "сантехника"]):
-                real_estate_signal += 0.35
+        if check_category(top_brand_category, CATEGORY_KEYWORDS["real_estate"]):
+            real_estate_signal += 0.35
         
-        if brand_categories:
-            real_estate_count = sum(1 for cat in brand_categories 
-                                   if any(kw in str(cat).lower() for kw in ["недвижимость", "ремонт", "строительство"]))
-            if real_estate_count > 0:
-                real_estate_signal += 0.2 * min(real_estate_count / 3.0, 1.0)
+        real_estate_count = count_category_matches(brand_categories, CATEGORY_KEYWORDS["real_estate"][:3])
+        if real_estate_count > 0:
+            real_estate_signal += 0.2 * min(real_estate_count / 3.0, 1.0)
         
         mortgage_score += min(real_estate_signal, 0.4)  # Ограничиваем вклад категорий
         
@@ -620,7 +789,37 @@ class NBOModel:
         if activity_intensity > 0.6 and diversity_score > 0.5:
             mortgage_score += 0.15
         
-        base_scores["Ипотека"] = min(mortgage_score, 1.0) if mortgage_score > 0 else 0.05
+        # Вспомогательная функция для безопасного расчета score
+        def safe_score(base_value, min_value=0.05, multiplier=1.0):
+            """Безопасный расчет score с минимальным значением."""
+            return min(max(base_value * multiplier, 0), 1.0) if base_value > 0 else min_value
+        
+        base_scores["Семейная ипотека"] = safe_score(mortgage_score)
+
+        # Расширенная линейка ипотечных продуктов - оптимизировано (групповая обработка)
+        standard_mortgages = ["Ипотека «Вторичное жилье»", "Ипотека «Новостройка»"]
+        for product in standard_mortgages:
+            base_scores[product] = safe_score(mortgage_score)
+        
+        # Госпрограммы (гео-специфичные, низкий базовый приоритет)
+        geo_programs = ["Госпрограмма «Новые субъекты»", "Дальневосточная и арктическая ипотека"]
+        for product in geo_programs:
+            base_scores[product] = 0.05
+        
+        # Военная ипотека
+        military_mortgage_score = 0.05
+        military_products = [
+            "Семейная военная ипотека", 
+            "Военная ипотека", 
+            "Военная ипотека «Новые субъекты»",
+            "Военная ипотека (Рефинансирование)"
+        ]
+        for product in military_products:
+            base_scores[product] = military_mortgage_score
+
+        # Залоговые и рефинансирование - оптимизировано
+        base_scores["Кредит под залог квартиры"] = safe_score(mortgage_score, multiplier=0.8)
+        base_scores["Рефинансирование ипотеки"] = safe_score(mortgage_score, multiplier=0.9)
         
         # Кредитная карта - улучшенная логика для активных покупателей
         card_score = 0.0
@@ -638,21 +837,14 @@ class NBOModel:
         if num_add_to_cart > 0 or num_orders > 0:
             card_score += 0.2 * min((num_add_to_cart + num_orders) / 5.0, 1.0)
         
-        # 3. Категории брендов: розничная торговля, услуги, развлечения
+        # 3. Категории брендов: розничная торговля, услуги, развлечения - оптимизировано
         retail_signal = 0.0
-        retail_keywords = ["розничная", "торговля", "супермаркет", "магазин", "гипермаркет", 
-                          "услуги", "развлечения", "ресторан", "кафе", "доставка", "еда"]
+        if check_category(top_brand_category, CATEGORY_KEYWORDS["retail"]):
+            retail_signal += 0.3
         
-        if top_brand_category:
-            brand_cat_lower = str(top_brand_category).lower()
-            if any(kw in brand_cat_lower for kw in retail_keywords):
-                retail_signal += 0.3
-        
-        if brand_categories:
-            retail_count = sum(1 for cat in brand_categories 
-                              if any(kw in str(cat).lower() for kw in retail_keywords))
-            if retail_count > 0:
-                retail_signal += 0.2 * min(retail_count / 2.0, 1.0)
+        retail_count = count_category_matches(brand_categories, CATEGORY_KEYWORDS["retail"])
+        if retail_count > 0:
+            retail_signal += 0.2 * min(retail_count / 2.0, 1.0)
         
         card_score += min(retail_signal, 0.3)
         
@@ -664,7 +856,7 @@ class NBOModel:
         if num_payments > 0 or num_views > 0:
             card_score += 0.15
         
-        base_scores["Кредитная карта"] = min(card_score, 1.0) if card_score > 0 else 0.15
+        base_scores["Кредитная карта «100+»"] = min(card_score, 1.0) if card_score > 0 else 0.15
         
         # Вклад - улучшенная логика для накопителей
         deposit_score = 0.0
@@ -678,21 +870,14 @@ class NBOModel:
         if avg_tx_normalized > 0.2 and payment_frequency > 0.4:
             deposit_score += 0.35
         
-        # 3. Категории брендов: финансовые услуги, инвестиции
+        # 3. Категории брендов: финансовые услуги, инвестиции - оптимизировано
         finance_signal = 0.0
-        finance_keywords = ["финансы", "инвестиции", "банк", "страхование", "брокер", 
-                           "управление активами", "пенсионный", "накопительный"]
+        if check_category(top_brand_category, CATEGORY_KEYWORDS["finance"]):
+            finance_signal += 0.35
         
-        if top_brand_category:
-            brand_cat_lower = str(top_brand_category).lower()
-            if any(kw in brand_cat_lower for kw in finance_keywords):
-                finance_signal += 0.35
-        
-        if brand_categories:
-            finance_count = sum(1 for cat in brand_categories 
-                              if any(kw in str(cat).lower() for kw in finance_keywords))
-            if finance_count > 0:
-                finance_signal += 0.25 * min(finance_count / 2.0, 1.0)
+        finance_count = count_category_matches(brand_categories, CATEGORY_KEYWORDS["finance"])
+        if finance_count > 0:
+            finance_signal += 0.25 * min(finance_count / 2.0, 1.0)
         
         deposit_score += min(finance_signal, 0.35)
         
@@ -704,7 +889,41 @@ class NBOModel:
         if high_value_customer > 0.6:
             deposit_score += 0.15
         
-        base_scores["Вклад"] = min(deposit_score, 1.0) if deposit_score > 0 else 0.1
+        base_scores["Вклад «Сильная ставка»"] = min(deposit_score, 1.0) if deposit_score > 0 else 0.1
+
+        # Другие вклады - оптимизировано (групповая обработка с модификаторами)
+        deposit_variants = [
+            ("Вклад «Мой доход»", 1.0, 0.1),
+            ("Вклад «Стабильный доход»", 0.95, 0.09),
+            ("Вклад «Моя копилка»", 0.9, 0.08),
+            ("Вклад «Мои возможности»", 0.85, 0.08)
+        ]
+        for product, multiplier, min_val in deposit_variants:
+            base_scores[product] = safe_score(deposit_score, min_value=min_val, multiplier=multiplier)
+
+        # Специализированные вклады (низкий базовый скор, нужна эвристика или ML)
+        # Ставка на будущее (НПФ) - для долгосрочных клиентов
+        future_score = 0.05
+        if engagement_duration > 0.6:
+             future_score += 0.2
+        base_scores["Вклад «Ставка на будущее»"] = future_score
+
+        # Драгоценный (Металлы) - для состоятельных
+        metal_score = 0.05
+        if high_value_customer > 0.7:
+             metal_score += 0.2
+        base_scores["Вклад «Драгоценный»"] = metal_score
+
+        # В юанях - для путешественников или диверсификации - оптимизировано
+        cny_score = 0.05
+        if check_category(top_category, CATEGORY_KEYWORDS["travel"]):
+             cny_score += 0.2
+        if diversity_score > 0.7:
+             cny_score += 0.15
+        base_scores["Вклад «В юанях»"] = cny_score
+
+        # Социальный вклад
+        base_scores["Вклад «Социальный вклад»"] = 0.05
         
         # Кредит - улучшенная логика для исследователей крупных покупок
         loan_score = 0.0
@@ -726,13 +945,34 @@ class NBOModel:
         if diversity_score > 0.6:
             loan_score += 0.2
         
-        # 5. Категории: техника, авто, крупная бытовая техника
-        if top_category:
-            cat_lower = str(top_category).lower()
-            if any(kw in cat_lower for kw in ["техника", "авто", "электроника", "бытовая техника", "мебель"]):
-                loan_score += 0.25
+        # 5. Категории: техника, авто, крупная бытовая техника - оптимизировано
+        tech_keywords = CATEGORY_KEYWORDS["tech"] + ["мебель"]
+        if check_category(top_category, tech_keywords):
+            loan_score += 0.25
         
-        base_scores["Кредит"] = min(loan_score, 1.0) if loan_score > 0 else 0.08
+        # Добавляем boost от embedding diversity
+        loan_score += embedding_loan_boost
+        
+        base_scores["Кредит на любые цели"] = min(loan_score, 1.0) if loan_score > 0 else 0.08
+
+        # Рефинансирование
+        refin_score = 0.0
+        # ВАЖНО: savings_score будет определен позже, используем временную проверку
+        savings_estimate = payment_frequency * avg_tx_normalized
+        if num_payments > 10 and savings_estimate < 0.3: # Много платежей, мало сбережений
+             refin_score += 0.3
+        if top_category and "bank" in str(top_category).lower(): # Платежи в другие банки
+             refin_score += 0.4
+        base_scores["Рефинансирование кредитов"] = min(refin_score, 1.0) if refin_score > 0 else 0.05
+
+        # Турбоденьги (экспресс)
+        turbo_score = 0.0
+        if 0 < avg_tx_normalized < 0.15 and payment_frequency > 0.4: # Частые мелкие траты
+             turbo_score += 0.35
+        base_scores["Экспресс-кредит «Турбоденьги»"] = min(turbo_score, 1.0) if turbo_score > 0 else 0.05
+
+        # Кредит ОПК
+        base_scores["Кредит для работников ОПК и военнослужащих"] = 0.05
         
         # Дебетовая карта - базовая рекомендация для всех активных пользователей
         # Используем обратную логику: если нет сильных сигналов для других продуктов
@@ -746,7 +986,145 @@ class NBOModel:
         elif active_spender < 0.3:
             debit_score = 0.35  # Не очень активный спендер
         
-        base_scores["Дебетовая карта"] = debit_score
+        base_scores["Дебетовая карта «Твой кэшбэк»"] = debit_score
+        
+        # Premium Banking
+        premium_score = 0.0
+        if high_value_customer > 0.7:
+            premium_score += 0.4
+        if max_tx_normalized > 0.6:
+            premium_score += 0.3
+        if diversity_score > 0.6:
+            premium_score += 0.2
+        base_scores["Пакет «Orange Premium Club»"] = min(premium_score, 1.0) if premium_score > 0 else 0.0
+
+        # Savings Account
+        savings_score = 0.0
+        if payment_frequency > 0.3 and avg_tx_normalized < 0.5:
+             savings_score += 0.3
+        if deposit_score > 0.4:
+             savings_score += 0.3
+        base_scores["Накопительный счет «Акцент»"] = min(savings_score, 1.0) if savings_score > 0 else 0.1
+
+        # Другие накопительные счета - оптимизировано
+        # Про запас - для новых или импульсивных
+        pro_zapas_score = savings_score * 0.95
+        if engagement_duration < 0.2: # Новые клиенты
+             pro_zapas_score += 0.2
+        base_scores["Накопительный счет «Про запас»"] = safe_score(pro_zapas_score, min_value=0.1)
+
+        # Хранитель - для консервативных
+        base_scores["Накопительный счет «Хранитель»"] = safe_score(savings_score, min_value=0.09, multiplier=0.9)
+
+        # CSKA Card - оптимизировано
+        cska_score = 0.0
+        if check_category(top_category, CATEGORY_KEYWORDS["sport"]):
+            cska_score += 0.4
+        if check_category(top_brand_category, CATEGORY_KEYWORDS["sport"]):
+             cska_score += 0.3
+        base_scores["Клубная карта ПФК ЦСКА"] = min(cska_score, 1.0) if cska_score > 0 else 0.0
+
+        # SVOi Card
+        # Базовая вероятность для возможности рекомендации через ML или если ничего другого не подходит
+        base_scores["Карта «СВОи»"] = 0.05
+
+        # Health Card "Tolko Vpered" - оптимизировано
+        health_score = 0.0
+        health_keywords = CATEGORY_KEYWORDS["health"]
+        if check_category(top_category, health_keywords):
+            health_score += 0.45
+        if check_category(top_brand_category, health_keywords):
+             health_score += 0.35
+        base_scores["Дебетовая карта «Только вперед»"] = min(health_score, 1.0) if health_score > 0 else 0.0
+
+        # Credit Card 180 days
+        cc180_score = 0.0
+        if max_tx_normalized > 0.4: # Big purchases
+            cc180_score += 0.4
+        if engagement_duration > 0.4: # Long term planning
+             cc180_score += 0.2
+        if card_score > 0.3: # If generic credit card is relevant
+             cc180_score += 0.2
+        base_scores["Кредитная карта «180 дней без %»"] = min(cc180_score, 1.0) if cc180_score > 0 else 0.1
+
+        # Pension Card
+        pension_score = 0.05
+        # Heuristic: small avg tx, pharmacy/grocery spending, but harder to distinguish from students without age.
+        # We give it low score to be picked up if patterns match via ML or specific rules.
+        if 0 < avg_tx_normalized < 0.2 and payment_frequency > 0.3:
+             pension_score += 0.2
+        base_scores["Дебетовая пенсионная карта ПСБ"] = pension_score
+        
+        # Salary Cards (Tvoy Plus, Zarkplata PRO) - оптимизировано
+        salary_score = 0.0
+        if num_payments > 5 and active_spender > 0.4:
+             salary_score += 0.3
+        for product in ["Зарплатная карта «Твой Плюс»", "Зарплатная карта «Зарплата PRO»"]:
+            base_scores[product] = salary_score
+
+        # Military Salary (Silnye Lyudi)
+        base_scores["Зарплатная карта «Сильные люди»"] = 0.05
+
+        # City Card
+        base_scores["Карта жителя"] = 0.1
+        
+        # Insurance and Ecosystem Products - оптимизировано
+        # Auto
+        auto_score = 0.0
+        if check_category(top_category, CATEGORY_KEYWORDS["auto"]):
+             auto_score += 0.4
+        base_scores["ОСАГО"] = min(auto_score, 1.0) if auto_score > 0 else 0.05
+        base_scores["Автопомощь на дорогах"] = min(auto_score, 1.0) if auto_score > 0 else 0.05
+        
+        # Health
+        health_ins_score = 0.0
+        health_keywords_short = CATEGORY_KEYWORDS["health"][:4]  # ["health", "medical", "pharmacy", "doctor"]
+        if check_category(top_category, health_keywords_short):
+             health_ins_score += 0.4
+        base_scores["Будьте здоровы"] = min(health_ins_score, 1.0) if health_ins_score > 0 else 0.05
+        base_scores["На всякий случай"] = min(health_ins_score * 0.8, 1.0) if health_ins_score > 0 else 0.05
+        
+        # Property & Housing
+        prop_score = 0.0
+        if mortgage_score > 0.3 or check_category(top_category, CATEGORY_KEYWORDS["property"]):
+             prop_score += 0.35
+        base_scores["Моя территория"] = min(prop_score, 1.0) if prop_score > 0 else 0.05
+        base_scores["Проверка недвижимости"] = min(prop_score * 0.9, 1.0) if prop_score > 0 else 0.05
+        base_scores["Приемка первичного жилья"] = min(prop_score * 0.8, 1.0) if prop_score > 0 else 0.05
+        
+        # Travel
+        travel_score = 0.0
+        if check_category(top_category, CATEGORY_KEYWORDS["travel"]):
+             travel_score += 0.4
+        base_scores["Страхование путешественников"] = min(travel_score, 1.0) if travel_score > 0 else 0.05
+        
+        # Financial Protection
+        prot_score = 0.1
+        if active_spender > 0.5:
+             prot_score += 0.2
+        base_scores["Универсальная защита"] = prot_score
+        base_scores["Защита вклада"] = 0.2 if deposit_score > 0.3 else 0.05
+        base_scores["Страхование от потери работы"] = 0.2 if loan_score > 0.3 else 0.05
+        base_scores["Страхование заемщиков кредитов"] = 0.3 if loan_score > 0.4 else 0.05
+        base_scores["Страхование ипотечных заемщиков"] = 0.3 if mortgage_score > 0.4 else 0.05
+        
+        # Legal & Life
+        base_scores["МультиЮрист"] = 0.1
+        base_scores["Домашний кэшбэк"] = 0.05
+        base_scores["Накопительное страхование жизни"] = 0.2 if high_value_customer > 0.5 else 0.05
+        
+        # Investments (PSB Invest)
+        invest_score = 0.0
+        # 1. High savings/value
+        if deposit_score > 0.5 or high_value_customer > 0.6:
+             invest_score += 0.35
+        # 2. Interest in finance
+        if finance_signal > 0.3:
+             invest_score += 0.3
+        # 3. Diversity (looking for options)
+        if diversity_score > 0.6:
+             invest_score += 0.2
+        base_scores["ПСБ Инвестиции"] = min(invest_score, 1.0) if invest_score > 0 else 0.05
         
         # Улучшенное объединение оценок с адаптивными весами
         final_scores = {}

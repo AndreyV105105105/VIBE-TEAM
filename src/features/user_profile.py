@@ -15,7 +15,8 @@ def create_user_profile(
     patterns: Optional[List] = None,
     user_id: Optional[str] = None,
     items_with_embeddings: Optional[Dict[str, pl.DataFrame]] = None,
-    item_to_brand_map: Optional[Dict[str, str]] = None
+    item_to_brand_map: Optional[Dict[str, str]] = None,
+    brands_categories_map: Optional[Dict[str, str]] = None
 ) -> Dict:
     """
     Создает профиль пользователя на основе событий и паттернов.
@@ -25,6 +26,7 @@ def create_user_profile(
     :param user_id: ID пользователя
     :param items_with_embeddings: Каталоги товаров с эмбеддингами (опционально)
     :param item_to_brand_map: Маппинг item_id -> brand_id для восстановления пропусков
+    :param brands_categories_map: Маппинг brand_id -> category для обогащения профиля
     :return: Словарь с профилем пользователя
     """
     profile = {}
@@ -48,13 +50,137 @@ def create_user_profile(
         profile["num_views"] = combined_views.height
         profile["unique_items"] = combined_views["item_id"].n_unique() if "item_id" in combined_views.columns else 0
         
-        # Топ категория (используем category из items если доступна, иначе category_id)
-        category_col = "category" if "category" in combined_views.columns else "category_id"
-        if category_col in combined_views.columns:
-            top_category = combined_views[category_col].mode().to_list()
-            profile["top_category"] = top_category[0] if top_category else None
+        # Топ категория - улучшенное извлечение с обогащением из items
+        # Сначала пробуем обогатить события категориями из items (даже если категории есть, но null)
+        item_to_category_map = {}
+        if items_with_embeddings and combined_views.height > 0 and "item_id" in combined_views.columns:
+            print(f"   🔍 Попытка извлечения категорий из {len(items_with_embeddings)} каталогов items...")
+            try:
+                # Собираем категории из всех каталогов items
+                for catalog_name, items_df in items_with_embeddings.items():
+                    if items_df.height > 0 and "item_id" in items_df.columns:
+                        # Ищем колонку категории (приоритет: category, затем category_id)
+                        cat_col = None
+                        if "category" in items_df.columns:
+                            cat_col = "category"
+                        elif "category_id" in items_df.columns:
+                            cat_col = "category_id"
+                        else:
+                            for col in items_df.columns:
+                                if col.lower() in ["category", "category_id", "categoryid"]:
+                                    cat_col = col
+                                    break
+                        
+                        if cat_col:
+                            # Создаем маппинг item_id -> category
+                            for row in items_df.select(["item_id", cat_col]).filter(
+                                pl.col(cat_col).is_not_null() & 
+                                (pl.col(cat_col) != "") & 
+                                (pl.col(cat_col).cast(pl.Utf8) != "nan")
+                            ).iter_rows(named=True):
+                                item_id = str(row["item_id"])
+                                category = str(row[cat_col])
+                                if item_id and category and category.lower() not in ["none", "null", "nan", ""]:
+                                    item_to_category_map[item_id] = category
+                
+                if item_to_category_map:
+                    print(f"   ✅ Создан маппинг категорий для {len(item_to_category_map)} товаров")
+                else:
+                    print(f"   ⚠ Не найдено категорий в каталогах items")
+            except Exception as e:
+                print(f"⚠ Ошибка при создании маппинга категорий из items: {e}")
+                import traceback
+                print(f"   Детали: {traceback.format_exc()}")
+        
+        # Обогащаем события категориями из items (если категорий нет или они null)
+        if item_to_category_map and "item_id" in combined_views.columns:
+            try:
+                # Добавляем категории из items к событиям
+                enriched_views = combined_views
+                category_from_items = pl.Series([
+                    item_to_category_map.get(str(item_id), None)
+                    for item_id in combined_views["item_id"].to_list()
+                ])
+                enriched_views = enriched_views.with_columns(category_from_items.alias("category_from_items"))
+                
+                # Используем category_from_items если оригинальная категория null
+                category_col = "category" if "category" in enriched_views.columns else "category_id"
+                if category_col in enriched_views.columns:
+                    enriched_views = enriched_views.with_columns(
+                        pl.when(pl.col("category_from_items").is_not_null())
+                        .then(pl.col("category_from_items"))
+                        .otherwise(pl.col(category_col))
+                        .alias("final_category")
+                    )
+                else:
+                    enriched_views = enriched_views.with_columns(
+                        pl.col("category_from_items").alias("final_category")
+                    )
+                
+                # Извлекаем топ категорию из обогащенных данных
+                valid_categories = enriched_views.filter(
+                    pl.col("final_category").is_not_null() & 
+                    (pl.col("final_category") != "") & 
+                    (pl.col("final_category").cast(pl.Utf8) != "nan")
+                )
+                if valid_categories.height > 0:
+                    top_category_list = valid_categories["final_category"].mode().to_list()
+                    profile["top_category"] = top_category_list[0] if top_category_list else None
+                    if profile["top_category"]:
+                        print(f"✅ Извлечена top_category: {profile['top_category']}")
+                else:
+                    profile["top_category"] = None
+            except Exception as e:
+                print(f"⚠ Ошибка при обогащении событий категориями: {e}")
+                # Fallback на стандартное извлечение
+                category_col = "category" if "category" in combined_views.columns else "category_id"
+                if category_col in combined_views.columns:
+                    valid_categories = combined_views.filter(
+                        pl.col(category_col).is_not_null() & 
+                        (pl.col(category_col) != "") & 
+                        (pl.col(category_col).cast(pl.Utf8) != "nan")
+                    )
+                    if valid_categories.height > 0:
+                        top_category_list = valid_categories[category_col].mode().to_list()
+                        profile["top_category"] = top_category_list[0] if top_category_list else None
+                    else:
+                        profile["top_category"] = None
+                else:
+                    profile["top_category"] = None
         else:
-            profile["top_category"] = None
+            # Стандартное извлечение категорий из событий
+            category_col = "category" if "category" in combined_views.columns else "category_id"
+            if category_col in combined_views.columns:
+                valid_categories = combined_views.filter(
+                    pl.col(category_col).is_not_null() & 
+                    (pl.col(category_col) != "") & 
+                    (pl.col(category_col).cast(pl.Utf8) != "nan")
+                )
+                if valid_categories.height > 0:
+                    top_category_list = valid_categories[category_col].mode().to_list()
+                    profile["top_category"] = top_category_list[0] if top_category_list else None
+                else:
+                    profile["top_category"] = None
+            else:
+                profile["top_category"] = None
+        
+        # Если категория все еще не найдена, пробуем извлечь напрямую из items (fallback)
+        if not profile.get("top_category") and item_to_category_map and combined_views.height > 0 and "item_id" in combined_views.columns:
+            try:
+                user_item_ids = combined_views["item_id"].unique().to_list()
+                user_categories = [
+                    item_to_category_map.get(str(item_id)) 
+                    for item_id in user_item_ids 
+                    if str(item_id) in item_to_category_map and item_to_category_map.get(str(item_id))
+                ]
+                
+                if user_categories:
+                    from collections import Counter
+                    top_category_counter = Counter(user_categories)
+                    profile["top_category"] = top_category_counter.most_common(1)[0][0]
+                    print(f"✅ Обогащена top_category из items (fallback): {profile['top_category']}")
+            except Exception as e:
+                print(f"⚠ Ошибка при обогащении категорий из items (fallback): {e}")
         
         # Регион (если есть)
         if "region" in combined_views.columns:
@@ -352,10 +478,30 @@ def create_user_profile(
             # Собираем все уникальные бренды пользователя (даже unknown, для статистики)
             unique_brands = pay_df["brand_id"].unique().to_list()
             profile["brand_ids"] = [b for b in unique_brands if b and b != "unknown"]
+            
+            # Обогащаем категориями брендов из маппинга
+            if brands_categories_map and profile["brand_ids"]:
+                brand_categories = []
+                for brand_id in profile["brand_ids"]:
+                    # Пробуем найти категорию для бренда
+                    # brands_categories_map ключи могут быть строками
+                    cat = brands_categories_map.get(str(brand_id))
+                    if cat:
+                        brand_categories.append(cat)
+                
+                if brand_categories:
+                    from collections import Counter
+                    profile["brand_categories"] = brand_categories
+                    profile["top_brand_category"] = Counter(brand_categories).most_common(1)[0][0]
+                    print(f"✅ Обогащено {len(brand_categories)} категорий брендов из маппинга")
+                else:
+                    print(f"⚠ Не найдено категорий для {len(profile['brand_ids'])} брендов пользователя")
         else:
             profile["top_brand"] = None
             profile["top_brand_id"] = None
             profile["brand_ids"] = []
+            profile["brand_categories"] = []
+            profile["top_brand_category"] = None
     else:
         profile["num_payments"] = 0
         profile["avg_tx"] = 0

@@ -99,8 +99,8 @@ class RuleEngine:
             if top_cat == "Foodstuffs and Beverages" or brand_cat == "Foodstuffs and Beverages":
                 rule = {
                     "pattern": pattern,
-                    "product": "Дебетовая карта 'Твой кэшбэк' (Супермаркеты)",
-                    "reason": "Вы часто покупаете продукты питания. Эта карта дает 5% кэшбэка в супермаркетах.",
+                    "product": "Дебетовая карта «Твой кэшбэк»",
+                    "reason": "Вы часто покупаете продукты питания. Эта карта дает повышенный кэшбэк в супермаркетах.",
                     "confidence": "высокая"
                 }
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
@@ -110,7 +110,7 @@ class RuleEngine:
             if (top_cat and "Renovation" in top_cat) or (brand_cat and "Renovation" in brand_cat):
                 rule = {
                     "pattern": pattern,
-                    "product": "Потребительский кредит 'На ремонт'",
+                    "product": "Кредит на любые цели",
                     "reason": "Мы заметили интерес к товарам для ремонта. Кредит поможет реализовать ваши планы быстрее.",
                     "confidence": "средняя"
                 }
@@ -121,8 +121,8 @@ class RuleEngine:
             if (top_cat and "Electronics" in top_cat) or (brand_cat and "Electronics" in brand_cat):
                 rule = {
                     "pattern": pattern,
-                    "product": "Кредитная карта '100 дней без %'",
-                    "reason": "Для покупок электроники отлично подойдет карта с длинным льготным периодом.",
+                    "product": "Кредитная карта «180 дней без %»",
+                    "reason": "Для покупок электроники отлично подойдет карта с длинным льготным периодом 180 дней.",
                     "confidence": "высокая"
                 }
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
@@ -133,8 +133,8 @@ class RuleEngine:
                (brand_cat and any(x in brand_cat for x in ["Auto", "Fuel", "Gas"])):
                 rule = {
                     "pattern": pattern,
-                    "product": "Автокарта 'Драйв'",
-                    "reason": "Повышенный кэшбэк на АЗС и автоуслуги.",
+                    "product": "Кредитная карта «Двойной кэшбэк»",
+                    "reason": "Получайте кэшбэк за любые покупки, включая АЗС и автоуслуги.",
                     "confidence": "высокая"
                 }
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
@@ -145,9 +145,77 @@ class RuleEngine:
                (brand_cat and any(x in brand_cat for x in ["Travel", "Hotel", "Airline"])):
                 rule = {
                     "pattern": pattern,
-                    "product": "Кредитная карта 'Travel Miles'",
-                    "reason": "Копите мили за покупки и путешествуйте бесплатно.",
+                    "product": "Пакет «Orange Premium Club»",
+                    "reason": "Для путешественников: доступ в бизнес-залы, страховка и особые привилегии.",
                     "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Sport" -> Карта ЦСКА
+            if (top_cat and any(x in top_cat for x in ["Sport", "Football", "Soccer", "Tickets"])) or \
+               (brand_cat and any(x in brand_cat for x in ["Sport", "Football", "Soccer", "Tickets"])):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Клубная карта ПФК ЦСКА",
+                    "reason": "Специально для болельщиков: скидки на билеты и атрибутику, уникальный дизайн.",
+                    "confidence": "высокая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Спорт + Медицина -> Карта "Только вперед"
+            if (top_cat and any(x in top_cat for x in ["Health", "Medical", "Pharmacy", "Doctor"])) or \
+               (brand_cat and any(x in brand_cat for x in ["Health", "Medical", "Pharmacy", "Doctor"])):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Дебетовая карта «Только вперед»",
+                    "reason": "Кэшбэк 7% в категориях «Спорт» и «Аптеки». Заботьтесь о здоровье с выгодой.",
+                    "confidence": "высокая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Крупные покупки -> Кредитная карта 180 дней
+            if "P→P→P" in pattern and "high_value" in pattern: # Hypothetical, relying on logic mainly
+                rule = {
+                    "pattern": pattern,
+                    "product": "Кредитная карта «180 дней без %»",
+                    "reason": "Длинный льготный период 180 дней идеален для крупных покупок и ремонта.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Кредит наличными (general)
+            if "high_value" in pattern:
+                 rule = {
+                    "pattern": pattern,
+                    "product": "Кредит на любые цели",
+                    "reason": "Для реализации больших планов. Выгодная ставка и удобное оформление.",
+                    "confidence": "средняя"
+                }
+                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                 return rule
+
+            # Эвристика: Рефинансирование (payment to other banks - hypothetical pattern)
+            if "pay_bank" in pattern or (top_cat and "Bank" in top_cat):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Рефинансирование кредитов",
+                    "reason": "Объедините кредиты в один с выгодной ставкой. Платите меньше, живите лучше.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Турбоденьги (Small rapid needs)
+            if "low_balance" in pattern: # Hypothetical
+                rule = {
+                    "pattern": pattern,
+                    "product": "Экспресс-кредит «Турбоденьги»",
+                    "reason": "Деньги здесь и сейчас. Быстрое оформление без лишних документов.",
+                    "confidence": "низкая"
                 }
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
                 return rule
@@ -156,8 +224,8 @@ class RuleEngine:
             if "V_V_V" in pattern or "V→V→V" in pattern:
                 rule = {
                     "pattern": pattern,
-                    "product": "Кредитная карта 'Возможности'",
-                    "reason": "Вы активно выбираете товары. Кредитная карта позволит купить всё сразу.",
+                    "product": "Кредитная карта «100+»",
+                    "reason": "Вы активно выбираете товары. Кредитная карта позволит купить всё сразу без переплаты.",
                     "confidence": "низкая"
                 }
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
