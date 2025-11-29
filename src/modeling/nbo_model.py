@@ -13,6 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 
 from src.features.user_profile import profile_to_features
+from src.utils.category_normalizer import CATEGORY_KEYWORDS as NORMALIZED_CATEGORY_KEYWORDS, check_category_match
 from src.utils.yandex_gpt_client import call_yandex_gpt
 
 
@@ -42,15 +43,64 @@ class NBOModel:
                 random_state=42
             )
             self.scaler = StandardScaler()
-            # Используем полный список конкретных продуктов ПСБ
+            # Используем полный список конкретных продуктов ПСБ (50+ продуктов)
             self.products = [
                 "Семейная ипотека",
                 "Ипотека «Вторичное жилье»",
                 "Ипотека «Новостройка»",
+                "Госпрограмма «Новые субъекты»",
+                "Семейная военная ипотека",
+                "Военная ипотека",
+                "Военная ипотека «Новые субъекты»",
+                "Дальневосточная и арктическая ипотека",
+                "Кредит под залог квартиры",
+                "Рефинансирование ипотеки",
+                "Военная ипотека (Рефинансирование)",
                 "Кредитная карта «100+»",
-                "Вклад «Сильная ставка»",
+                "Кредитная карта «180 дней без %»",
+                "Дебетовая карта «Твой кэшбэк»",
+                "Дебетовая карта «Только вперед»",
+                "Клубная карта ПФК ЦСКА",
+                "Карта «СВОи»",
+                "Дебетовая пенсионная карта ПСБ",
+                "Зарплатная карта «Твой Плюс»",
+                "Зарплатная карта «Сильные люди»",
+                "Зарплатная карта «Зарплата PRO»",
+                "Карта жителя",
                 "Кредит на любые цели",
-                "Дебетовая карта «Твой кэшбэк»"
+                "Кредит для работников предприятий ОПК и военнослужащих",
+                "Рефинансирование кредитов",
+                "Экспресс-кредит «Турбоденьги»",
+                "Вклад «Сильная ставка»",
+                "Вклад «Ставка на будущее»",
+                "Вклад «Драгоценный»",
+                "Вклад «Мой доход»",
+                "Вклад «Стабильный доход»",
+                "Вклад «Моя копилка»",
+                "Вклад «Мои возможности»",
+                "Вклад «В юанях»",
+                "Вклад «Социальный вклад»",
+                "Накопительный счет «Про запас»",
+                "Накопительный счет «Хранитель»",
+                "Накопительный счет «Акцент»",
+                "ПСБ Инвестиции",
+                "Пакет «Orange Premium Club»",
+                "МультиЮрист",
+                "Защита вклада",
+                "Универсальная защита",
+                "Домашний кэшбэк",
+                "На всякий случай",
+                "Автопомощь на дорогах",
+                "Будьте здоровы",
+                "Моя территория",
+                "Страхование путешественников",
+                "Проверка недвижимости",
+                "ОСАГО",
+                "Страхование от потери работы",
+                "Приемка первичного жилья",
+                "Накопительное страхование жизни",
+                "Страхование заемщиков кредитов",
+                "Страхование ипотечных заемщиков"
             ]
     
     def load_model(self) -> None:
@@ -293,14 +343,25 @@ class NBOModel:
             cat_short = top_category[:15] if len(top_category) > 15 else top_category
             parts.append(f"К:{cat_short}")
         
-        # Используем конкретные продукты ПСБ в промпте
-        product_examples = "Ипотека/Кредитная карта «100+»/Вклад «Сильная ставка»/Кредит на любые цели/Дебетовая карта «Твой кэшбэк»"
-        prompt = "|".join(parts) + f"|Продукт ПСБ? ({product_examples})"
+        # Используем конкретные продукты ПСБ в промпте (полный список)
+        # Формируем компактный список продуктов для промпта (топ-10 наиболее популярных)
+        product_examples_short = "Семейная ипотека/Ипотека «Вторичное жилье»/Кредитная карта «100+»/Кредитная карта «180 дней без %»/Вклад «Сильная ставка»/Кредит на любые цели/Дебетовая карта «Твой кэшбэк»/ПСБ Инвестиции/Накопительный счет «Про запас»/ОСАГО"
+        
+        # Полный список всех продуктов для инструкций
+        all_products_list = ", ".join(self.products[:30])  # Первые 30 для компактности
+        
+        prompt = "|".join(parts) + f"|Продукт ПСБ? ({product_examples_short})"
         
         try:
             response = call_yandex_gpt(
                 input_text=prompt,
-                instructions="Эксперт банковских продуктов ПСБ. Профиль → конкретный продукт ПСБ. Ответ: только название продукта из списка ПСБ.",
+                instructions=(
+                    f"Эксперт банковских продуктов ПСБ. Профиль → конкретный продукт ПСБ. "
+                    f"Доступные продукты: {all_products_list}. "
+                    f"Ответ: ТОЛЬКО точное название продукта из списка. "
+                    f"НЕ используй общие категории типа 'Кредит', 'Ипотека', 'Кредитка'. "
+                    f"Примеры: 'Кредит на любые цели', 'Кредитная карта «180 дней без %»', 'Вклад «Сильная ставка»'."
+                ),
                 temperature=0.3
             )
             
@@ -458,25 +519,17 @@ class NBOModel:
         """
         recommendations = []
         
-        # Константы для категорий (оптимизация - избегаем дублирования)
-        CATEGORY_KEYWORDS = {
-            "real_estate": ["недвижимость", "ремонт", "дом", "квартира", "строительство", "мебель", "интерьер", "сантехника"],
-            "retail": ["розничная", "торговля", "супермаркет", "магазин", "гипермаркет", "услуги", "развлечения", "ресторан", "кафе", "доставка", "еда"],
-            "finance": ["финансы", "инвестиции", "банк", "страхование", "брокер", "управление активами", "пенсионный", "накопительный"],
-            "auto": ["auto", "gas", "fuel", "car"],
-            "health": ["health", "medical", "pharmacy", "doctor", "sport", "gym"],
-            "travel": ["travel", "hotel", "airline"],
-            "sport": ["sport", "football", "soccer", "fitness", "gym"],
-            "tech": ["техника", "авто", "электроника", "бытовая техника"],
-            "property": ["house", "repair", "furniture", "renovation"]
-        }
+        # Используем нормализованные ключевые слова категорий (с поддержкой разных языков)
+        CATEGORY_KEYWORDS = NORMALIZED_CATEGORY_KEYWORDS
         
-        # Вспомогательная функция для проверки категорий
+        # Вспомогательная функция для проверки категорий (использует нормализацию)
         def check_category(category_str, keywords_list):
             """Проверяет, содержит ли категория ключевые слова."""
             if not category_str:
                 return False
+            # Используем нормализацию для поддержки разных языков
             cat_lower = str(category_str).lower()
+            # Проверяем вхождение ключевых слов (они уже включают разные языки)
             return any(kw in cat_lower for kw in keywords_list)
         
         # Вспомогательная функция для подсчета совпадений в списке категорий
@@ -1161,14 +1214,75 @@ class NBOModel:
         # Сортируем по оценке
         sorted_products = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
         
-        # Возвращаем топ-K
-        for product, score in sorted_products[:top_k]:
-            recommendations.append({
-                "product": product,
-                "score": float(score)
-            })
+        # Фильтруем общие категории (которые не являются конкретными продуктами ПСБ)
+        generic_products = ["Кредит", "Ипотека", "Кредитка", "Вклад", "Дебет", "Кредитная карта", "Дебетовая карта"]
         
-        return recommendations
+        # Фильтруем и добавляем разнообразие: группируем продукты по типам
+        def get_product_type(product_name: str) -> str:
+            """Определяет тип продукта для группировки."""
+            product_lower = product_name.lower()
+            if "ипотек" in product_lower:
+                return "mortgage"
+            elif "кредитн" in product_lower and "карт" in product_lower:
+                return "credit_card"
+            elif "дебетов" in product_lower or "зарплатн" in product_lower or "пенсионн" in product_lower or "карта жителя" in product_lower or "цска" in product_lower or "свои" in product_lower:
+                return "debit_card"
+            elif "кредит" in product_lower and "карт" not in product_lower:
+                return "loan"
+            elif "вклад" in product_lower:
+                return "deposit"
+            elif "накопительный счет" in product_lower:
+                return "savings"
+            elif "инвестиции" in product_lower:
+                return "investment"
+            elif "страхован" in product_lower or "мультиюрист" in product_lower or "защита" in product_lower or "кэшбэк" in product_lower or "осаго" in product_lower or "помощь" in product_lower or "здоровы" in product_lower:
+                return "insurance_service"
+            elif "пакет" in product_lower or "orange" in product_lower or "premium" in product_lower:
+                return "package"
+            else:
+                return "other"
+        
+        # Фильтруем общие категории и обеспечиваем разнообразие
+        selected_products = []
+        used_types = set()
+        max_per_type = 1  # Максимум 1 продукт каждого типа
+        
+        for product, score in sorted_products:
+            # Фильтруем общие категории и проверяем, что продукт в списке конкретных продуктов ПСБ
+            if product in generic_products or product not in self.products:
+                continue
+            
+            product_type = get_product_type(product)
+            
+            # Обеспечиваем разнообразие: не более max_per_type продуктов каждого типа
+            type_count = sum(1 for p in selected_products if get_product_type(p["product"]) == product_type)
+            if type_count < max_per_type:
+                selected_products.append({
+                    "product": product,
+                    "score": float(score)
+                })
+                used_types.add(product_type)
+                
+                if len(selected_products) >= top_k:
+                    break
+        
+        # Если не хватило разнообразных продуктов, добавляем оставшиеся по score
+        if len(selected_products) < top_k:
+            for product, score in sorted_products:
+                if len(selected_products) >= top_k:
+                    break
+                
+                # Пропускаем уже выбранные и общие категории
+                if product in generic_products or product not in self.products:
+                    continue
+                
+                if not any(p["product"] == product for p in selected_products):
+                    selected_products.append({
+                        "product": product,
+                        "score": float(score)
+                    })
+        
+        return selected_products[:top_k]
 
 
 def recommend(

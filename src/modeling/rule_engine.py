@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from collections import defaultdict
 
 from src.features.rule_generator import generate_rule_from_pattern
+from src.utils.category_normalizer import normalize_category, check_category_match, get_category_keywords
 
 
 class RuleEngine:
@@ -95,8 +96,12 @@ class RuleEngine:
             top_cat = user_context.get("top_category")
             brand_cat = user_context.get("top_brand_category")
             
-            # Эвристика: Категория "Foodstuffs" -> Карта с кэшбэком на супермаркеты
-            if top_cat == "Foodstuffs and Beverages" or brand_cat == "Foodstuffs and Beverages":
+            # Нормализуем категории для проверки
+            top_cat_normalized = normalize_category(top_cat) if top_cat else ""
+            brand_cat_normalized = normalize_category(brand_cat) if brand_cat else ""
+            
+            # Эвристика: Категория "Food" -> Карта с кэшбэком на супермаркеты
+            if check_category_match(top_cat, ["food"]) or check_category_match(brand_cat, ["food"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Дебетовая карта «Твой кэшбэк»",
@@ -106,8 +111,8 @@ class RuleEngine:
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
                 return rule
                 
-            # Эвристика: Категория "Renovation" -> Кредит на ремонт
-            if (top_cat and "Renovation" in top_cat) or (brand_cat and "Renovation" in brand_cat):
+            # Эвристика: Категория "Real Estate/Renovation" -> Кредит на ремонт
+            if check_category_match(top_cat, ["real_estate"]) or check_category_match(brand_cat, ["real_estate"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Кредит на любые цели",
@@ -118,7 +123,7 @@ class RuleEngine:
                 return rule
                 
             # Эвристика: Категория "Electronics" -> Рассрочка или Страховка гаджетов
-            if (top_cat and "Electronics" in top_cat) or (brand_cat and "Electronics" in brand_cat):
+            if check_category_match(top_cat, ["electronics"]) or check_category_match(brand_cat, ["electronics"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Кредитная карта «180 дней без %»",
@@ -129,8 +134,7 @@ class RuleEngine:
                 return rule
 
             # Эвристика: Категория "Auto" / "Fuel" -> Автокарта
-            if (top_cat and any(x in top_cat for x in ["Auto", "Fuel", "Gas"])) or \
-               (brand_cat and any(x in brand_cat for x in ["Auto", "Fuel", "Gas"])):
+            if check_category_match(top_cat, ["auto"]) or check_category_match(brand_cat, ["auto"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Кредитная карта «Двойной кэшбэк»",
@@ -141,8 +145,7 @@ class RuleEngine:
                 return rule
 
             # Эвристика: Категория "Travel" / "Hotels" -> Мильная карта
-            if (top_cat and any(x in top_cat for x in ["Travel", "Hotel", "Airline"])) or \
-               (brand_cat and any(x in brand_cat for x in ["Travel", "Hotel", "Airline"])):
+            if check_category_match(top_cat, ["travel"]) or check_category_match(brand_cat, ["travel"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Пакет «Orange Premium Club»",
@@ -153,8 +156,7 @@ class RuleEngine:
                 return rule
 
             # Эвристика: Категория "Sport" -> Карта ЦСКА
-            if (top_cat and any(x in top_cat for x in ["Sport", "Football", "Soccer", "Tickets"])) or \
-               (brand_cat and any(x in brand_cat for x in ["Sport", "Football", "Soccer", "Tickets"])):
+            if check_category_match(top_cat, ["sport"]) or check_category_match(brand_cat, ["sport"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Клубная карта ПФК ЦСКА",
@@ -165,8 +167,7 @@ class RuleEngine:
                 return rule
 
             # Эвристика: Спорт + Медицина -> Карта "Только вперед"
-            if (top_cat and any(x in top_cat for x in ["Health", "Medical", "Pharmacy", "Doctor"])) or \
-               (brand_cat and any(x in brand_cat for x in ["Health", "Medical", "Pharmacy", "Doctor"])):
+            if check_category_match(top_cat, ["health", "sport"]) or check_category_match(brand_cat, ["health", "sport"]):
                 rule = {
                     "pattern": pattern,
                     "product": "Дебетовая карта «Только вперед»",
@@ -227,6 +228,116 @@ class RuleEngine:
                     "product": "Кредитная карта «100+»",
                     "reason": "Вы активно выбираете товары. Кредитная карта позволит купить всё сразу без переплаты.",
                     "confidence": "низкая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Clothing/Fashion" -> Карта с кэшбэком
+            if check_category_match(top_cat, ["clothing"]) or check_category_match(brand_cat, ["clothing"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Дебетовая карта «Твой кэшбэк»",
+                    "reason": "Повышенный кэшбэк на покупки одежды и аксессуаров. Зарабатывайте на каждом шопинге.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Children/Kids" -> Семейные продукты
+            if check_category_match(top_cat, ["children"]) or check_category_match(brand_cat, ["children"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Семейная ипотека",
+                    "reason": "Для семей с детьми предусмотрены специальные условия по ипотеке и льготные ставки.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Beauty/Cosmetics" -> Карта с кэшбэком
+            if check_category_match(top_cat, ["beauty"]) or check_category_match(brand_cat, ["beauty"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Дебетовая карта «Твой кэшбэк»",
+                    "reason": "Кэшбэк на косметику и средства ухода. Красота с выгодой.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Books/Education" -> Инвестиции
+            if check_category_match(top_cat, ["books", "education"]) or check_category_match(brand_cat, ["books", "education"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "ПСБ Инвестиции",
+                    "reason": "Инвестируйте в свое будущее. Долгосрочные накопления с профессиональным управлением.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Home Appliances/Furniture" -> Кредит на любые цели
+            if check_category_match(top_cat, ["home_appliances", "furniture", "kitchen"]) or check_category_match(brand_cat, ["home_appliances", "furniture", "kitchen"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Кредит на любые цели",
+                    "reason": "Для обустройства дома - выгодный кредит на покупку техники и мебели.",
+                    "confidence": "высокая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Construction/Renovation" -> Кредит на ремонт
+            if check_category_match(top_cat, ["construction", "tools"]) or check_category_match(brand_cat, ["construction", "tools"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Кредит на любые цели",
+                    "reason": "Кредит на ремонт и строительные материалы. Реализуйте планы по обустройству жилья.",
+                    "confidence": "высокая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Pets" -> Накопительный счет
+            if check_category_match(top_cat, ["pets"]) or check_category_match(brand_cat, ["pets"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Накопительный счет «Про запас»",
+                    "reason": "Накопительный счет поможет отложить средства на регулярные расходы, включая уход за питомцами.",
+                    "confidence": "низкая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Entertainment/Games" -> Кредитная карта
+            if check_category_match(top_cat, ["entertainment", "movies", "music"]) or check_category_match(brand_cat, ["entertainment", "movies", "music"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Кредитная карта «180 дней без %»",
+                    "reason": "Для крупных покупок техники и развлечений - карта с длинным льготным периодом.",
+                    "confidence": "средняя"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Pharmacy" -> Карта "Только вперед"
+            if check_category_match(top_cat, ["pharmacy"]) or check_category_match(brand_cat, ["pharmacy"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Дебетовая карта «Только вперед»",
+                    "reason": "Кэшбэк 7% в аптеках. Заботьтесь о здоровье с выгодой.",
+                    "confidence": "высокая"
+                }
+                self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
+                return rule
+
+            # Эвристика: Категория "Jewelry" -> Вклад "Драгоценный"
+            if check_category_match(top_cat, ["jewelry"]) or check_category_match(brand_cat, ["jewelry"]):
+                rule = {
+                    "pattern": pattern,
+                    "product": "Вклад «Драгоценный»",
+                    "reason": "Специальный вклад для покупки драгоценных металлов с повышенной ставкой.",
+                    "confidence": "средняя"
                 }
                 self.add_rule(pattern, rule["product"], rule["reason"], rule["confidence"])
                 return rule

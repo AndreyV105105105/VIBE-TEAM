@@ -4,7 +4,12 @@ services:
       context: .
       dockerfile: Dockerfile
       # BuildKit включен по умолчанию в Docker Desktop и новых версиях Docker
-      # Для явного включения: export DOCKER_BUILDKIT=1 перед docker compose build
+      # Docker автоматически кэширует слои:
+      # - Системные зависимости (apt-get) кэшируются, если не меняются
+      # - requirements.txt копируется отдельным слоем
+      # - pip install кэшируется, если requirements.txt не изменился
+      # - Код копируется в конце, пересобирается только при изменении
+      # Для явного включения BuildKit: export DOCKER_BUILDKIT=1 перед docker compose build
     container_name: psb-recommendation
     ports:
       - "8501:8501"

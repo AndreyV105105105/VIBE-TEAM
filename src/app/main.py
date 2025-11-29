@@ -325,7 +325,8 @@ if 'result' in st.session_state:
                 if brand_name:
                     top_brand_display = f"{brand_name} (ID: {top_brand_id})"
                 else:
-                    top_brand_display = f"ID: {top_brand_id}"
+                    # Всегда показываем ID, даже если нет названия
+                    top_brand_display = f"Brand {top_brand_id} (ID: {top_brand_id})"
             
             st.json({
                 "Средний чек": avg_tx_display,

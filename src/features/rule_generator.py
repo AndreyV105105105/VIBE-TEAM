@@ -34,10 +34,24 @@ def generate_rule_from_pattern(
     
     context_text = "|" + "|".join(context_parts) if context_parts else ""
     
-    # Максимально сжатый промпт
-    prompt = f"Паттерн:{pattern}{context_text}|Продукт? JSON:{{product,confidence,reason}}"
+    # Максимально сжатый промпт с списком конкретных продуктов ПСБ
+    psb_products_list = (
+        "Семейная ипотека, Ипотека «Вторичное жилье», Ипотека «Новостройка», "
+        "Госпрограмма «Новые субъекты», Семейная военная ипотека, Военная ипотека, "
+        "Кредит на любые цели, Рефинансирование кредитов, Экспресс-кредит «Турбоденьги», "
+        "Кредитная карта «100+», Кредитная карта «180 дней без %», "
+        "Вклад «Сильная ставка», Вклад «Ставка на будущее», Вклад «Драгоценный», "
+        "Дебетовая карта «Твой кэшбэк», Дебетовая карта «Только вперед», "
+        "Накопительный счет «Акцент», ПСБ Инвестиции"
+    )
     
-    instructions = "Эксперт банковских рекомендаций. Паттерн → продукт (Ипотека/Кредитка/Вклад/Кредит/Дебет)."
+    prompt = f"Паттерн:{pattern}{context_text}|Продукт из списка ПСБ: {psb_products_list} JSON:{{product,confidence,reason}}"
+    
+    instructions = (
+        "Эксперт банковских рекомендаций ПСБ. Паттерн → конкретный продукт ПСБ. "
+        "Используй ТОЛЬКО конкретные названия продуктов из списка (например: 'Кредит на любые цели', 'Кредитная карта «100+»', 'Вклад «Сильная ставка»'). "
+        "НЕ используй общие категории типа 'Кредит', 'Ипотека', 'Кредитка'."
+    )
     
     try:
         response = call_yandex_gpt(
@@ -50,26 +64,53 @@ def generate_rule_from_pattern(
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
             rule_data = json.loads(json_match.group())
+            product_name = rule_data.get("product", "")
+            # Проверяем, что это конкретный продукт ПСБ, а не общая категория
+            generic_products = ["Кредит", "Ипотека", "Кредитка", "Вклад", "Дебет", "Кредитная карта", "Дебетовая карта"]
+            if product_name in generic_products or not product_name:
+                # Fallback на конкретный продукт по паттерну
+                if "P" in pattern or "R" in pattern:  # Payments/Requests
+                    product_name = "Кредит на любые цели"
+                elif "V" in pattern:  # Views
+                    product_name = "Кредитная карта «100+»"
+                else:
+                    product_name = "Дебетовая карта «Твой кэшбэк»"
+            
             return {
                 "pattern": pattern,
-                "product": rule_data.get("product", "Кредитная карта"),
+                "product": product_name,
                 "confidence": rule_data.get("confidence", "средняя"),
                 "reason": rule_data.get("reason", "На основе анализа паттерна")
             }
         
-        # Fallback
+        # Fallback на конкретный продукт
+        if "P" in pattern or "R" in pattern:
+            fallback_product = "Кредит на любые цели"
+        elif "V" in pattern:
+            fallback_product = "Кредитная карта «100+»"
+        else:
+            fallback_product = "Дебетовая карта «Твой кэшбэк»"
+        
         return {
             "pattern": pattern,
-            "product": "Кредитная карта",
+            "product": fallback_product,
             "confidence": "средняя",
             "reason": "Общий паттерн поведения"
         }
         
     except Exception as e:
         print(f"Ошибка при генерации правила: {e}")
+        # Fallback на конкретный продукт
+        if "P" in pattern or "R" in pattern:
+            fallback_product = "Кредит на любые цели"
+        elif "V" in pattern:
+            fallback_product = "Кредитная карта «100+»"
+        else:
+            fallback_product = "Дебетовая карта «Твой кэшбэк»"
+        
         return {
             "pattern": pattern,
-            "product": "Кредитная карта",
+            "product": fallback_product,
             "confidence": "низкая",
             "reason": "Ошибка при генерации"
         }

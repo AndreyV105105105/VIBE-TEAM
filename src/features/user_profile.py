@@ -50,10 +50,27 @@ def create_user_profile(
         profile["num_views"] = combined_views.height
         profile["unique_items"] = combined_views["item_id"].n_unique() if "item_id" in combined_views.columns else 0
         
+        print(f"   📊 Всего событий просмотра: {combined_views.height}")
+        print(f"   📊 Уникальных товаров: {profile['unique_items']}")
+        print(f"   📊 Колонки в событиях: {list(combined_views.columns)}")
+        
+        # Проверяем наличие категорий в событиях
+        has_category = "category" in combined_views.columns
+        has_category_id = "category_id" in combined_views.columns
+        print(f"   📊 category в событиях: {has_category}, category_id в событиях: {has_category_id}")
+        
+        if has_category:
+            non_null_cats = combined_views.filter(pl.col("category").is_not_null()).height
+            print(f"   📊 Событий с category: {non_null_cats} из {combined_views.height}")
+        if has_category_id:
+            non_null_cat_ids = combined_views.filter(pl.col("category_id").is_not_null()).height
+            print(f"   📊 Событий с category_id: {non_null_cat_ids} из {combined_views.height}")
+        
         # Топ категория - улучшенное извлечение с обогащением из items
         # Сначала пробуем обогатить события категориями из items (даже если категории есть, но null)
         item_to_category_map = {}
         if items_with_embeddings and combined_views.height > 0 and "item_id" in combined_views.columns:
+            print(f"   🔍 items_with_embeddings доступен: {len(items_with_embeddings)} каталогов")
             print(f"   🔍 Попытка извлечения категорий из {len(items_with_embeddings)} каталогов items...")
             try:
                 # Собираем категории из всех каталогов items
@@ -127,9 +144,12 @@ def create_user_profile(
                     top_category_list = valid_categories["final_category"].mode().to_list()
                     profile["top_category"] = top_category_list[0] if top_category_list else None
                     if profile["top_category"]:
-                        print(f"✅ Извлечена top_category: {profile['top_category']}")
+                        print(f"✅ Извлечена top_category: {profile['top_category']} (из {valid_categories.height} событий с категориями)")
+                    else:
+                        print(f"⚠ mode() вернул пустой список для top_category")
                 else:
                     profile["top_category"] = None
+                    print(f"⚠ Не найдено событий с валидными категориями после обогащения")
             except Exception as e:
                 print(f"⚠ Ошибка при обогащении событий категориями: {e}")
                 # Fallback на стандартное извлечение
@@ -143,10 +163,14 @@ def create_user_profile(
                     if valid_categories.height > 0:
                         top_category_list = valid_categories[category_col].mode().to_list()
                         profile["top_category"] = top_category_list[0] if top_category_list else None
+                        if profile["top_category"]:
+                            print(f"✅ Извлечена top_category (fallback): {profile['top_category']}")
                     else:
                         profile["top_category"] = None
+                        print(f"⚠ Не найдено валидных категорий в колонке {category_col}")
                 else:
                     profile["top_category"] = None
+                    print(f"⚠ Колонка {category_col} отсутствует в событиях")
         else:
             # Стандартное извлечение категорий из событий
             category_col = "category" if "category" in combined_views.columns else "category_id"
@@ -159,10 +183,14 @@ def create_user_profile(
                 if valid_categories.height > 0:
                     top_category_list = valid_categories[category_col].mode().to_list()
                     profile["top_category"] = top_category_list[0] if top_category_list else None
+                    if profile["top_category"]:
+                        print(f"✅ Извлечена top_category (стандартный метод): {profile['top_category']}")
                 else:
                     profile["top_category"] = None
+                    print(f"⚠ Не найдено валидных категорий в колонке {category_col} (стандартный метод)")
             else:
                 profile["top_category"] = None
+                print(f"⚠ Колонки category и category_id отсутствуют в событиях")
         
         # Если категория все еще не найдена, пробуем извлечь напрямую из items (fallback)
         if not profile.get("top_category") and item_to_category_map and combined_views.height > 0 and "item_id" in combined_views.columns:
@@ -456,9 +484,195 @@ def create_user_profile(
             profile["min_tx"] = 0
         
         # Топ бренд (сохраняем и ID и название, если доступно)
+        # Ищем brand_id во всех источниках: payments, receipts, marketplace, retail
         # Также собираем категории брендов для анализа
-        if "brand_id" in pay_df.columns:
-            # Фильтруем невалидные бренды для поиска моды
+        
+        # Объединяем все источники для поиска брендов
+        # ВАЖНО: Приводим все brand_id к строковому типу для совместимости при concat
+        all_brand_sources = []
+        
+        # Вспомогательная функция для нормализации brand_id
+        def normalize_brand_column(df: pl.DataFrame) -> pl.DataFrame:
+            """Приводит brand_id к строковому типу, обрабатывая все возможные варианты."""
+            if df.height == 0:
+                return df
+            try:
+                # Пробуем привести к строке через различные методы
+                if "brand_id" in df.columns:
+                    # Сначала пытаемся через cast
+                    try:
+                        return df.select([
+                            pl.col("brand_id").cast(pl.Utf8, strict=False).alias("brand_id")
+                        ])
+                    except:
+                        # Если не получается, пробуем через with_columns
+                        try:
+                            return df.with_columns(
+                                pl.col("brand_id").cast(pl.Utf8, strict=False).alias("brand_id")
+                            ).select(["brand_id"])
+                        except:
+                            # Последний вариант - через преобразование в Python и обратно
+                            brand_series = df["brand_id"].to_list()
+                            brand_strings = [str(b) if b is not None else None for b in brand_series]
+                            return pl.DataFrame({"brand_id": brand_strings})
+                return df
+            except Exception as e:
+                print(f"⚠ Ошибка при нормализации brand_id: {e}")
+                return pl.DataFrame({"brand_id": pl.Series([], dtype=pl.Utf8)})
+        
+        if pay_df.height > 0 and "brand_id" in pay_df.columns:
+            brand_df = normalize_brand_column(pay_df)
+            if brand_df.height > 0:
+                all_brand_sources.append(brand_df)
+                print(f"   📊 Payments: {pay_df.height} транзакций, brand_id присутствует")
+        
+        if receipts_df.height > 0 and "brand_id" in receipts_df.columns:
+            brand_df = normalize_brand_column(receipts_df)
+            if brand_df.height > 0:
+                all_brand_sources.append(brand_df)
+                print(f"   📊 Receipts: {receipts_df.height} чеков, brand_id присутствует")
+        
+        if mp_df.height > 0 and "brand_id" in mp_df.columns:
+            brand_df = normalize_brand_column(mp_df)
+            if brand_df.height > 0:
+                all_brand_sources.append(brand_df)
+                print(f"   📊 Marketplace: {mp_df.height} событий, brand_id присутствует")
+        
+        if retail_df.height > 0 and "brand_id" in retail_df.columns:
+            brand_df = normalize_brand_column(retail_df)
+            if brand_df.height > 0:
+                all_brand_sources.append(brand_df)
+                print(f"   📊 Retail: {retail_df.height} событий, brand_id присутствует")
+        
+        # Объединяем все источники брендов с явным указанием схемы
+        if all_brand_sources:
+            # Создаем новый список с нормализованными DataFrame
+            normalized_sources = []
+            for i, df in enumerate(all_brand_sources):
+                if df.height == 0:
+                    continue
+                try:
+                    # Проверяем схему и нормализуем
+                    schema = df.schema
+                    if "brand_id" not in schema:
+                        print(f"   ⚠ DataFrame {i} не содержит brand_id, пропускаем")
+                        continue
+                    
+                    current_type = schema["brand_id"]
+                    # Если тип уже Utf8, проверяем что все значения строковые
+                    if current_type == pl.Utf8:
+                        normalized_sources.append(df)
+                    else:
+                        # Приводим к Utf8
+                        print(f"   ⚠ DataFrame {i}: brand_id имеет тип {current_type}, приводим к Utf8")
+                        try:
+                            # Сначала пробуем через cast
+                            normalized_df = df.with_columns(
+                                pl.col("brand_id").cast(pl.Utf8, strict=False).alias("brand_id")
+                            )
+                            # Проверяем результат
+                            if normalized_df.schema["brand_id"] == pl.Utf8:
+                                normalized_sources.append(normalized_df)
+                            else:
+                                # Если cast не сработал, используем Python-конвертацию
+                                raise ValueError("Cast не привел к Utf8")
+                        except Exception as e:
+                            print(f"   ⚠ Cast не сработал для DataFrame {i}: {e}, используем Python-конвертацию")
+                            # Fallback: конвертируем через Python
+                            brand_values = df["brand_id"].to_list()
+                            brand_strings = [str(b) if b is not None else None for b in brand_values]
+                            normalized_sources.append(pl.DataFrame({"brand_id": brand_strings}))
+                except Exception as e:
+                    print(f"   ⚠ Ошибка при обработке DataFrame {i}: {e}, пропускаем")
+                    continue
+            
+            if normalized_sources:
+                # Используем how="diagonal" для автоматического приведения типов
+                try:
+                    combined_brands = pl.concat(normalized_sources, how="diagonal")
+                except Exception as e1:
+                    print(f"   ⚠ Ошибка при concat с diagonal: {e1}, пробуем обычный concat")
+                    try:
+                        combined_brands = pl.concat(normalized_sources)
+                    except Exception as e2:
+                        print(f"   ⚠ Ошибка при обычном concat: {e2}, создаем пустой DataFrame")
+                        combined_brands = pl.DataFrame({"brand_id": pl.Series([], dtype=pl.Utf8)})
+            else:
+                # Нет валидных источников
+                combined_brands = pl.DataFrame({"brand_id": pl.Series([], dtype=pl.Utf8)})
+            
+            # Фильтруем невалидные бренды
+            valid_brands = combined_brands.filter(
+                pl.col("brand_id").is_not_null() & 
+                (pl.col("brand_id") != "unknown") & 
+                (pl.col("brand_id") != "") &
+                (pl.col("brand_id").cast(pl.Utf8) != "nan")
+            )
+            
+            if valid_brands.height > 0:
+                # Приводим brand_id к строке и нормализуем
+                valid_brands_normalized = valid_brands.with_columns(
+                    pl.col("brand_id").cast(pl.Utf8).str.replace(r"\.0$", "").alias("brand_id_normalized")
+                )
+                
+                top_brand_list = valid_brands_normalized["brand_id_normalized"].mode().to_list()
+                if top_brand_list:
+                    profile["top_brand"] = top_brand_list[0]
+                    profile["top_brand_id"] = top_brand_list[0]
+                    # Выводим ID бренда (используем название из brands_map если доступно через импорт, иначе ID)
+                    # Выводим ID бренда
+                    print(f"✅ Определен топ бренд: Brand {profile['top_brand']} (ID: {profile['top_brand']}) (из {valid_brands.height} валидных записей)")
+                else:
+                    profile["top_brand"] = None
+                    profile["top_brand_id"] = None
+                    print(f"⚠ Не удалось определить топ бренд (mode() вернул пустой список)")
+            else:
+                profile["top_brand"] = None
+                profile["top_brand_id"] = None
+                print(f"⚠ Не удалось определить топ бренд (нет валидных brand_id в {combined_brands.height} записях)")
+                # Показываем примеры для отладки
+                if combined_brands.height > 0:
+                    sample_brands = combined_brands["brand_id"].head(10).to_list()
+                    print(f"   Примеры brand_id в данных: {sample_brands[:5]}")
+                    
+                    # Считаем сколько None vs других значений
+                    null_count = combined_brands.filter(pl.col("brand_id").is_null()).height
+                    non_null_count = combined_brands.filter(pl.col("brand_id").is_not_null()).height
+                    print(f"   Статистика: None значений = {null_count}, не-None = {non_null_count}")
+                    
+                    # Проверяем, есть ли другие идентификаторы в исходных данных
+                    if pay_df.height > 0:
+                        print(f"   🔍 Диагностика: проверяем доступные колонки в payments...")
+                        pay_cols = pay_df.columns
+                        print(f"   Колонки в payments: {pay_cols}")
+                        # Показываем примеры данных из payments для диагностики
+                        if pay_df.height > 0:
+                            sample_pay = pay_df.head(3)
+                            print(f"   Примеры строк payments: {sample_pay}")
+                    if receipts_df.height > 0:
+                        print(f"   🔍 Диагностика: проверяем доступные колонки в receipts...")
+                        receipt_cols = receipts_df.columns
+                        print(f"   Колонки в receipts: {receipt_cols}")
+                        if receipts_df.height > 0:
+                            sample_receipts = receipts_df.head(3)
+                            print(f"   Примеры строк receipts: {sample_receipts}")
+            
+            # Собираем все уникальные бренды пользователя (даже если топ бренд не найден)
+            unique_brands = combined_brands["brand_id"].drop_nulls().unique().to_list()
+            profile["brand_ids"] = [str(b) for b in unique_brands if b and str(b) != "unknown" and str(b) != "nan" and str(b).lower() != "none"]
+            
+            # Если не нашли топ бренд, но есть brand_ids, используем первый
+            if not profile.get("top_brand") and profile.get("brand_ids"):
+                profile["top_brand"] = profile["brand_ids"][0]
+                profile["top_brand_id"] = profile["brand_ids"][0]
+                # Выводим ID бренда
+                print(f"   ℹ Использован первый доступный brand_id: Brand {profile['top_brand']} (ID: {profile['top_brand']})")
+            elif not profile.get("top_brand") and not profile.get("brand_ids"):
+                # Гарантируем, что brand_ids существует как пустой список
+                profile["brand_ids"] = []
+                print(f"   ⚠ Невозможно определить топ бренд: все brand_id в данных равны None или пустые")
+        elif "brand_id" in pay_df.columns:
+            # Fallback: проверяем только payments (старая логика)
             valid_brands = pay_df.filter(
                 pl.col("brand_id").is_not_null() & 
                 (pl.col("brand_id") != "unknown") & 
@@ -469,38 +683,66 @@ def create_user_profile(
                 top_brand = valid_brands["brand_id"].mode().to_list()
                 profile["top_brand"] = top_brand[0] if top_brand else None
                 profile["top_brand_id"] = top_brand[0] if top_brand else None
-                print(f"✅ Определен топ бренд: {profile['top_brand']}")
+                # Выводим ID бренда
+                print(f"✅ Определен топ бренд (fallback): Brand {profile['top_brand']} (ID: {profile['top_brand']})")
             else:
                 profile["top_brand"] = None
                 profile["top_brand_id"] = None
-                print(f"⚠ Не удалось определить топ бренд (нет валидных данных)")
+                print(f"⚠ Не удалось определить топ бренд (нет валидных данных в payments)")
             
-            # Собираем все уникальные бренды пользователя (даже unknown, для статистики)
+            # Собираем все уникальные бренды пользователя
             unique_brands = pay_df["brand_id"].unique().to_list()
-            profile["brand_ids"] = [b for b in unique_brands if b and b != "unknown"]
-            
-            # Обогащаем категориями брендов из маппинга
-            if brands_categories_map and profile["brand_ids"]:
-                brand_categories = []
-                for brand_id in profile["brand_ids"]:
-                    # Пробуем найти категорию для бренда
-                    # brands_categories_map ключи могут быть строками
-                    cat = brands_categories_map.get(str(brand_id))
-                    if cat:
-                        brand_categories.append(cat)
-                
-                if brand_categories:
-                    from collections import Counter
-                    profile["brand_categories"] = brand_categories
-                    profile["top_brand_category"] = Counter(brand_categories).most_common(1)[0][0]
-                    print(f"✅ Обогащено {len(brand_categories)} категорий брендов из маппинга")
-                else:
-                    print(f"⚠ Не найдено категорий для {len(profile['brand_ids'])} брендов пользователя")
+            profile["brand_ids"] = [str(b) for b in unique_brands if b and str(b) != "unknown"]
         else:
+            # Нет brand_id ни в одном источнике
             profile["top_brand"] = None
             profile["top_brand_id"] = None
-            profile["brand_ids"] = []
-            profile["brand_categories"] = []
+            if "brand_ids" not in profile:
+                profile["brand_ids"] = []
+            print(f"⚠ Колонка brand_id отсутствует во всех источниках данных")
+        
+        # Обогащаем категориями брендов из маппинга (для всех случаев, когда есть brand_ids)
+        # ВАЖНО: Этот блок должен быть вне блока if pay_df.height > 0, чтобы работать всегда
+        if brands_categories_map and profile.get("brand_ids"):
+            brand_categories = []
+            for brand_id in profile["brand_ids"]:
+                # Нормализуем brand_id для поиска (удаляем .0)
+                brand_id_str = str(brand_id)
+                if brand_id_str.endswith(".0"):
+                    brand_id_str = brand_id_str[:-2]
+                
+                # Пробуем найти категорию для бренда
+                # Пробуем несколько вариантов ключа
+                cat = brands_categories_map.get(brand_id_str)
+                if not cat:
+                    # Пробуем с .0
+                    cat = brands_categories_map.get(f"{brand_id_str}.0")
+                if not cat:
+                    # Пробуем без нормализации
+                    cat = brands_categories_map.get(str(brand_id))
+                
+                if cat:
+                    brand_categories.append(cat)
+            
+            if brand_categories:
+                from collections import Counter
+                profile["brand_categories"] = brand_categories
+                profile["top_brand_category"] = Counter(brand_categories).most_common(1)[0][0]
+                print(f"✅ Обогащено {len(brand_categories)} категорий брендов из маппинга")
+                print(f"   ✅ top_brand_category: {profile['top_brand_category']}")
+                
+                # Fallback: если top_category не найдена, используем top_brand_category
+                if not profile.get("top_category") and profile["top_brand_category"]:
+                    profile["top_category"] = profile["top_brand_category"]
+                    print(f"   ℹ Использована top_brand_category как top_category: {profile['top_category']}")
+            else:
+                print(f"⚠ Не найдено категорий для {len(profile['brand_ids'])} брендов пользователя")
+                print(f"   Brand IDs пользователя: {profile['brand_ids'][:5]}...")
+                if brands_categories_map:
+                    print(f"   Доступные ключи в brands_categories_map: {list(brands_categories_map.keys())[:10]}...")
+        else:
+            if "brand_categories" not in profile:
+                profile["brand_categories"] = []
             profile["top_brand_category"] = None
     else:
         profile["num_payments"] = 0
@@ -509,6 +751,11 @@ def create_user_profile(
         profile["max_tx"] = 0
         profile["min_tx"] = 0
         profile["top_brand"] = None
+    
+    # Финальный fallback: если top_category не найдена, используем top_brand_category
+    if not profile.get("top_category") and profile.get("top_brand_category"):
+        profile["top_category"] = profile["top_brand_category"]
+        print(f"   ℹ Финальный fallback: использована top_brand_category как top_category: {profile['top_category']}")
     
     # Временные характеристики
     # Объединяем события для вычисления временных характеристик
@@ -688,4 +935,5 @@ def profile_to_features(profile: Dict) -> List[float]:
         features.append(0.0)
     
     return features
+
 

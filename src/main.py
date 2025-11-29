@@ -147,116 +147,168 @@ def process_user(
         # Если категории не найдены в brands.pq, извлекаем их из items.pq
         # ОПТИМИЗАЦИЯ: загружаем каталоги только если нужно, и только нужные колонки
         # Согласно T-ECD документации, категории товаров находятся в items.pq
-        if len(brands_categories_map) == 0:
-            print(f"📦 Извлечение категорий брендов из каталогов товаров (items.pq)...")
-            print(f"   ⚡ Используем оптимизацию: только нужные колонки, без embedding (экономия ~30 ГБ)")
-            try:
-                # Сначала собираем brand_id из событий пользователя (если уже загружены)
-                # Это позволит применить predicate pushdown
-                user_brand_ids = set()
-                # Пока не загружены события, пропускаем predicate pushdown
-                # Но все равно используем projection pushdown (только нужные колонки)
-                
-                # Загружаем каталоги товаров с оптимизацией (только нужные колонки, без embedding)
-                # Используем LazyFrame для отложенной загрузки
-                marketplace_items_lazy = loader.load_marketplace_items(
-                    brand_ids=None,  # Пока не знаем brand_id пользователя
-                    use_lazy=True
-                )
-                retail_items_lazy = loader.load_retail_items(
-                    brand_ids=None,
-                    use_lazy=True
-                )
-                
-                # Объединяем LazyFrames
-                all_items_lazy = []
-                if marketplace_items_lazy is not None:
+        # Извлекаем категории брендов из каталогов товаров (items.pq)
+        # ВАЖНО: Всегда пытаемся извлечь, даже если маппинг уже заполнен из brands.pq
+        # Это позволяет дополнить маппинг категориями из items
+        print(f"📦 Извлечение категорий брендов из каталогов товаров (items.pq)...")
+        if len(brands_categories_map) > 0:
+            print(f"   Текущий размер маппинга: {len(brands_categories_map)} брендов (будет дополнен)")
+        print(f"   ⚡ Используем оптимизацию: только нужные колонки, без embedding (экономия ~30 ГБ)")
+        try:
+            # Сначала собираем brand_id из событий пользователя (если уже загружены)
+            # Это позволит применить predicate pushdown
+            user_brand_ids = set()
+            # Пока не загружены события, пропускаем predicate pushdown
+            # Но все равно используем projection pushdown (только нужные колонки)
+            
+            # Загружаем каталоги товаров с оптимизацией (только нужные колонки, без embedding)
+            # Используем LazyFrame для отложенной загрузки
+            marketplace_items_lazy = loader.load_marketplace_items(
+                brand_ids=None,  # Пока не знаем brand_id пользователя
+                use_lazy=True
+            )
+            retail_items_lazy = loader.load_retail_items(
+                brand_ids=None,
+                use_lazy=True
+            )
+            
+            # Объединяем LazyFrames
+            # ВАЖНО: Даже если marketplace items.pq поврежден, используем retail items
+            all_items_lazy = []
+            if marketplace_items_lazy is not None:
+                try:
+                    schema = marketplace_items_lazy.collect_schema()
+                    if len(schema) > 0:
+                        all_items_lazy.append(marketplace_items_lazy)
+                        print(f"   ✅ Marketplace items LazyFrame добавлен (схема: {len(schema)} колонок)")
+                except Exception as e:
+                    print(f"   ⚠ Marketplace items LazyFrame не удалось добавить: {e}")
+            
+            if retail_items_lazy is not None:
+                try:
+                    schema = retail_items_lazy.collect_schema()
+                    if len(schema) > 0:
+                        all_items_lazy.append(retail_items_lazy)
+                        print(f"   ✅ Retail items LazyFrame добавлен (схема: {len(schema)} колонок)")
+                except Exception as e:
+                    print(f"   ⚠ Retail items LazyFrame не удалось добавить: {e}")
+            
+            if not all_items_lazy:
+                print(f"   ⚠ Нет доступных items LazyFrames для извлечения категорий")
+            
+            if all_items_lazy:
+                # Объединяем LazyFrames (еще не загружены в память!)
+                # ВАЖНО: Если только один источник, используем его напрямую (без concat)
+                if len(all_items_lazy) == 1:
+                    combined_lazy = all_items_lazy[0]
+                else:
+                    # Пробуем объединить с diagonal для автоматического приведения типов
                     try:
-                        schema = marketplace_items_lazy.collect_schema()
-                        if len(schema) > 0:
-                            all_items_lazy.append(marketplace_items_lazy)
-                    except:
-                        pass
+                        combined_lazy = pl.concat(all_items_lazy, how="diagonal")
+                    except Exception as e1:
+                        print(f"   ⚠ Ошибка при concat с diagonal: {e1}, пробуем обычный concat")
+                        try:
+                            # Перед обычным concat нормализуем типы brand_id в каждом LazyFrame
+                            normalized_lazy = []
+                            for lazy_frame in all_items_lazy:
+                                try:
+                                    schema = lazy_frame.collect_schema()
+                                    if "brand_id" in schema:
+                                        # Приводим brand_id к строке
+                                        normalized_frame = lazy_frame.with_columns(
+                                            pl.col("brand_id").cast(pl.Utf8, strict=False).alias("brand_id")
+                                        )
+                                        normalized_lazy.append(normalized_frame)
+                                    else:
+                                        normalized_lazy.append(lazy_frame)
+                                except:
+                                    normalized_lazy.append(lazy_frame)
+                            combined_lazy = pl.concat(normalized_lazy)
+                        except Exception as e2:
+                            print(f"   ⚠ Ошибка при обычном concat после нормализации: {e2}")
+                            # Если и это не работает, используем только retail items
+                            retail_only = [lf for lf in all_items_lazy if "retail" in str(lf) or any("retail" in str(lf) for _ in [1])]
+                            if retail_only:
+                                combined_lazy = retail_only[0]
+                                print(f"   ⚠ Используем только retail items из-за проблем с объединением")
+                            else:
+                                combined_lazy = all_items_lazy[0]
+                                print(f"   ⚠ Используем первый доступный источник")
                 
-                if retail_items_lazy is not None:
-                    try:
-                        schema = retail_items_lazy.collect_schema()
-                        if len(schema) > 0:
-                            all_items_lazy.append(retail_items_lazy)
-                    except:
-                        pass
-                
-                if all_items_lazy:
-                    # Объединяем LazyFrames (еще не загружены в память!)
-                    combined_lazy = pl.concat(all_items_lazy)
-                    
-                    # Проверяем наличие нужных колонок
+                # Проверяем наличие нужных колонок
+                try:
                     schema = combined_lazy.collect_schema()
                     has_brand_id = "brand_id" in schema
                     has_category = any(col.lower() in ["category_id", "category", "categoryid"] for col in schema)
+                except Exception as e:
+                    print(f"⚠ Ошибка при получении схемы combined_lazy: {e}")
+                    has_brand_id = False
+                    has_category = False
+                
+                if has_brand_id and has_category:
+                    # Определяем колонку категории
+                    category_col = None
+                    for col in schema:
+                        if col.lower() in ["category_id", "category", "categoryid", "cat_id", "cat"]:
+                            category_col = col
+                            break
                     
-                    if has_brand_id and has_category:
-                        # Определяем колонку категории
-                        category_col = None
-                        for col in schema:
-                            if col.lower() in ["category_id", "category", "categoryid", "cat_id", "cat"]:
-                                category_col = col
-                                break
-                        
-                        if category_col:
-                            # Проверяем наличие brand_id перед группировкой
-                            if "brand_id" not in schema:
-                                print(f"⚠ brand_id не найден в items.pq. Используем item_id для группировки.")
-                                # Если нет brand_id, группируем по item_id (но это не даст категории брендов)
-                                # В этом случае пропускаем извлечение категорий брендов
-                                print(f"⚠ Невозможно извлечь категории брендов без brand_id. Пропускаем.")
-                            else:
-                                # Группируем по brand_id и находим самую частую категорию для каждого бренда
-                                # Это выполняется на LazyFrame - данные еще не загружены в память!
+                    if category_col:
+                        # Проверяем наличие brand_id перед группировкой
+                        if "brand_id" not in schema:
+                            print(f"⚠ brand_id не найден в items.pq. Используем item_id для группировки.")
+                            # Если нет brand_id, группируем по item_id (но это не даст категории брендов)
+                            # В этом случае пропускаем извлечение категорий брендов
+                            print(f"⚠ Невозможно извлечь категории брендов без brand_id. Пропускаем.")
+                        else:
+                            # ОПТИМИЗАЦИЯ: Загружаем категории только для первых N брендов как кэш
+                            # Основная загрузка будет после загрузки событий пользователя
+                            # Это ускоряет начальную загрузку, но все равно дает базовый набор категорий
+                            print(f"   ⚡ Ограниченная загрузка категорий (первые 1000 брендов для кэша)...")
+                            try:
+                                # Ограничиваем количество брендов для быстрой загрузки
                                 brand_categories_lazy = combined_lazy.group_by("brand_id").agg([
                                     pl.col(category_col).mode().alias("top_category"),
                                     pl.count().alias("item_count")
                                 ]).filter(
                                     pl.col("top_category").is_not_null()
-                                )
-                            
-                                # ТОЛЬКО СЕЙЧАС загружаем в память (после всех оптимизаций)
-                                print(f"   ⚡ Применяем агрегацию на LazyFrame (данные еще не загружены в память)...")
-                                try:
-                                    brand_categories = brand_categories_lazy.collect()
-                                    
-                                    print(f"✅ Загружено {brand_categories.height} уникальных брендов (после агрегации)")
-                                    
-                                    # Создаем маппинг brand_id -> category
-                                    for row in brand_categories.iter_rows(named=True):
-                                        brand_id = str(row.get("brand_id", ""))
-                                        # Нормализуем ID (удаляем .0)
-                                        if brand_id.endswith(".0"):
-                                            brand_id = brand_id[:-2]
-                                            
-                                        top_categories = row.get("top_category", [])
-                                        if brand_id and top_categories and len(top_categories) > 0:
-                                            # Берем первую (самую частую) категорию
-                                            category = str(top_categories[0])
-                                            if category and category.lower() not in ["none", "null", "nan", ""]:
-                                                brands_categories_map[brand_id] = category
-                                    
-                                    print(f"✅ Извлечено категорий для {len(brands_categories_map)} брендов из каталогов товаров")
-                                    print(f"   (Примеры ID: {list(brands_categories_map.keys())[:5]})")
-                                except Exception as e:
-                                    print(f"⚠ Ошибка при агрегации категорий брендов: {e}")
-                                    import traceback
-                                    print(f"   Детали: {traceback.format_exc()}")
-                        else:
-                            print(f"⚠ Не найдена колонка категории в items.pq. Колонки: {list(schema.keys())}")
+                                ).head(1000)  # Ограничиваем первыми 1000 брендами
+                                
+                                brand_categories = brand_categories_lazy.collect()
+                                
+                                initial_count = len(brands_categories_map)
+                                
+                                # Создаем маппинг brand_id -> category
+                                for row in brand_categories.iter_rows(named=True):
+                                    brand_id = str(row.get("brand_id", ""))
+                                    # Нормализуем ID (удаляем .0)
+                                    if brand_id.endswith(".0"):
+                                        brand_id = brand_id[:-2]
+                                        
+                                    top_categories = row.get("top_category", [])
+                                    if brand_id and top_categories and len(top_categories) > 0:
+                                        # Берем первую (самую частую) категорию
+                                        category = str(top_categories[0])
+                                        if category and category.lower() not in ["none", "null", "nan", ""]:
+                                            brands_categories_map[brand_id] = category
+                                
+                                added_count = len(brands_categories_map) - initial_count
+                                print(f"✅ Загружено {added_count} категорий брендов в кэш (всего: {len(brands_categories_map)})")
+                                print(f"   (Примеры ID: {list(brands_categories_map.keys())[:5]})")
+                                print(f"   ℹ Остальные категории будут загружены для конкретных брендов пользователя")
+                            except Exception as e:
+                                print(f"⚠ Ошибка при ограниченной загрузке категорий: {e}")
+                                print(f"   ℹ Продолжаем - категории будут загружены для брендов пользователя")
                     else:
-                        print(f"⚠ В items.pq отсутствуют нужные колонки. brand_id: {has_brand_id}, category: {has_category}")
+                        print(f"⚠ Не найдена колонка категории в items.pq. Колонки: {list(schema.keys())}")
                 else:
-                    print(f"⚠ Каталоги товаров (items.pq) не найдены или пусты")
-            except Exception as e:
-                print(f"⚠ Ошибка при извлечении категорий из items.pq: {e}")
-                import traceback
-                print(f"   Детали: {traceback.format_exc()}")
+                    print(f"⚠ В items.pq отсутствуют нужные колонки. brand_id: {has_brand_id}, category: {has_category}")
+            else:
+                print(f"⚠ Каталоги товаров (items.pq) не найдены или пусты")
+        except Exception as e:
+            print(f"⚠ Ошибка при извлечении категорий из items.pq: {e}")
+            import traceback
+            print(f"   Детали: {traceback.format_exc()}")
         
         if len(brands_categories_map) == 0:
             print(f"⚠ Категории брендов не найдены ни в brands.pq, ни в items.pq")
@@ -538,19 +590,66 @@ def process_user(
             print(f"   Детали: {traceback.format_exc()}")
         
         # Обогащаем события категориями из каталогов
-        if items_catalog and user_marketplace.height > 0:
+        # Определяем тип товаров по префиксу item_id для выбора правильного каталога
+        if items_catalog and user_marketplace.height > 0 and "item_id" in user_marketplace.columns:
             try:
-                mp_items = items_catalog.get("marketplace")
-                if mp_items is not None and "item_id" in mp_items.columns and "category" in mp_items.columns:
-                    # Объединяем с каталогом для получения категорий
-                    user_marketplace = user_marketplace.join(
-                        mp_items.select(["item_id", "category", "subcategory"]),
-                        on="item_id",
-                        how="left"
-                    )
-                    print(f"✅ Обогащено {user_marketplace.filter(pl.col('category').is_not_null()).height} событий marketplace категориями")
+                # Определяем префиксы item_id для выбора правильного каталога
+                item_ids_list = user_marketplace["item_id"].unique().to_list()
+                
+                # Пробуем обогатить из обоих каталогов (retail и marketplace)
+                # Сначала пробуем retail_items для товаров с префиксом nfmcg_
+                retail_enriched = False
+                if "retail" in items_catalog:
+                    retail_items = items_catalog.get("retail")
+                    if retail_items is not None and retail_items.height > 0 and "item_id" in retail_items.columns:
+                        category_col = "category" if "category" in retail_items.columns else "category_id"
+                        if category_col in retail_items.columns:
+                            # Объединяем с retail каталогом
+                            user_marketplace = user_marketplace.join(
+                                retail_items.select(["item_id", category_col, "subcategory"] if "subcategory" in retail_items.columns else ["item_id", category_col]),
+                                on="item_id",
+                                how="left"
+                            )
+                            enriched_count = user_marketplace.filter(pl.col(category_col).is_not_null()).height
+                            if enriched_count > 0:
+                                print(f"✅ Обогащено {enriched_count} событий marketplace категориями из retail_items")
+                                retail_enriched = True
+                
+                # Затем пробуем marketplace_items для товаров, которые не обогатились
+                if "marketplace" in items_catalog:
+                    mp_items = items_catalog.get("marketplace")
+                    if mp_items is not None and mp_items.height > 0 and "item_id" in mp_items.columns:
+                        category_col = "category" if "category" in mp_items.columns else "category_id"
+                        if category_col in mp_items.columns:
+                            # Объединяем только те события, которые еще не имеют категорий
+                            current_category_col = "category" if "category" in user_marketplace.columns else ("category_id" if "category_id" in user_marketplace.columns else None)
+                            
+                            if current_category_col is None or user_marketplace.filter(pl.col(current_category_col).is_not_null()).height < user_marketplace.height:
+                                # Если категорий нет или не все события обогащены, пробуем marketplace
+                                user_marketplace = user_marketplace.join(
+                                    mp_items.select(["item_id", category_col, "subcategory"] if "subcategory" in mp_items.columns else ["item_id", category_col]),
+                                    on="item_id",
+                                    how="left",
+                                    suffix="_mp"
+                                )
+                                
+                                # Объединяем категории (используем первую не-null)
+                                if f"{category_col}_mp" in user_marketplace.columns:
+                                    if current_category_col:
+                                        user_marketplace = user_marketplace.with_columns(
+                                            pl.coalesce([pl.col(current_category_col), pl.col(f"{category_col}_mp")]).alias(category_col)
+                                        ).drop(f"{category_col}_mp")
+                                    else:
+                                        user_marketplace = user_marketplace.rename({f"{category_col}_mp": category_col})
+                                
+                                final_category_col = category_col if current_category_col is None else current_category_col
+                                enriched_count = user_marketplace.filter(pl.col(final_category_col).is_not_null()).height
+                                if enriched_count > 0 and not retail_enriched:
+                                    print(f"✅ Обогащено {enriched_count} событий marketplace категориями из marketplace_items")
             except Exception as e:
                 print(f"⚠ Ошибка при обогащении marketplace категориями: {e}")
+                import traceback
+                print(f"   Детали: {traceback.format_exc()}")
         
         if items_catalog and user_retail.height > 0:
             try:
@@ -581,6 +680,351 @@ def process_user(
                 print(f"✅ Обогащено {user_receipts.filter(pl.col('category').is_not_null()).height} чеков категориями")
             except Exception as e:
                 print(f"⚠ Ошибка при обогащении receipts категориями: {e}")
+        
+        # После обогащения событий категориями, извлекаем категории брендов из items_catalog
+        # для brand_id пользователя (это важно - теперь мы знаем brand_id пользователя!)
+        # Сначала собираем brand_id пользователя
+        user_brand_ids_set = set()
+        
+        if user_payments.height > 0 and "brand_id" in user_payments.columns:
+            brand_ids = user_payments["brand_id"].drop_nulls().unique().to_list()
+            user_brand_ids_set.update([str(bid) for bid in brand_ids if bid])
+        
+        if user_marketplace.height > 0 and "brand_id" in user_marketplace.columns:
+            brand_ids = user_marketplace["brand_id"].drop_nulls().unique().to_list()
+            user_brand_ids_set.update([str(bid) for bid in brand_ids if bid])
+        
+        if user_retail.height > 0 and "brand_id" in user_retail.columns:
+            brand_ids = user_retail["brand_id"].drop_nulls().unique().to_list()
+            user_brand_ids_set.update([str(bid) for bid in brand_ids if bid])
+        
+        # Нормализуем brand_id (удаляем .0)
+        user_brand_ids_normalized = []
+        for bid in user_brand_ids_set:
+            if bid and bid != "unknown":
+                # Удаляем .0 в конце если есть
+                if bid.endswith(".0"):
+                    bid = bid[:-2]
+                user_brand_ids_normalized.append(bid)
+        
+        # Если есть бренды пользователя, загружаем дополнительно товары для этих брендов
+        # (даже если их нет в событиях пользователя - нужны для извлечения категорий)
+        if user_brand_ids_normalized:
+            print(f"🔍 Загрузка товаров для {len(user_brand_ids_normalized)} брендов пользователя для извлечения категорий...")
+            
+            try:
+                # Загружаем товары для брендов пользователя (без фильтрации по item_id)
+                print(f"   🔍 Попытка загрузить товары для брендов: {user_brand_ids_normalized[:5]}...")
+                brand_items_marketplace_lazy = loader.load_marketplace_items(
+                    brand_ids=user_brand_ids_normalized,
+                    item_ids=None,  # Без фильтрации по item_id - нужны все товары бренда
+                    use_lazy=True,
+                    include_embedding=False
+                )
+                brand_items_retail_lazy = loader.load_retail_items(
+                    brand_ids=user_brand_ids_normalized,
+                    item_ids=None,
+                    use_lazy=True,
+                    include_embedding=False
+                )
+                
+                # Проверяем, что загрузка прошла успешно
+                if brand_items_marketplace_lazy is None:
+                    print(f"   ⚠ Marketplace items lazy frame = None (возможно, файл не найден)")
+                else:
+                    try:
+                        schema = brand_items_marketplace_lazy.collect_schema()
+                        print(f"   ✅ Marketplace items schema: {list(schema.keys())}")
+                    except:
+                        print(f"   ⚠ Не удалось получить schema для marketplace items")
+                
+                if brand_items_retail_lazy is None:
+                    print(f"   ⚠ Retail items lazy frame = None (возможно, файл не найден)")
+                else:
+                    try:
+                        schema = brand_items_retail_lazy.collect_schema()
+                        print(f"   ✅ Retail items schema: {list(schema.keys())}")
+                    except:
+                        print(f"   ⚠ Не удалось получить schema для retail items")
+                
+                # Добавляем в items_catalog или обновляем существующие
+                if brand_items_marketplace_lazy is not None:
+                    try:
+                        brand_marketplace_items = brand_items_marketplace_lazy.limit(1000).collect()  # Ограничиваем для производительности
+                        if brand_marketplace_items.height > 0:
+                            # Проверяем наличие категорий в загруженных товарах
+                            has_category_col = any(col.lower() in ["category", "category_id"] for col in brand_marketplace_items.columns)
+                            if has_category_col:
+                                category_col = [col for col in brand_marketplace_items.columns if col.lower() in ["category", "category_id"]][0]
+                                non_null_categories = brand_marketplace_items.filter(pl.col(category_col).is_not_null()).height
+                                print(f"   📊 Marketplace: {brand_marketplace_items.height} товаров, {non_null_categories} с категориями")
+                            
+                            if "marketplace" in items_catalog:
+                                # Объединяем с существующими
+                                items_catalog["marketplace"] = pl.concat([items_catalog["marketplace"], brand_marketplace_items]).unique(subset=["item_id"], keep="first")
+                                print(f"   ✅ Обновлен marketplace каталог: добавлено товаров для брендов пользователя")
+                            else:
+                                items_catalog["marketplace"] = brand_marketplace_items
+                                print(f"   ✅ Загружен marketplace каталог: {brand_marketplace_items.height} товаров для брендов")
+                        else:
+                            print(f"   ⚠ Marketplace: не найдено товаров для брендов {user_brand_ids_normalized[:3]}...")
+                    except Exception as e:
+                        print(f"   ⚠ Ошибка при загрузке marketplace товаров для брендов: {e}")
+                        import traceback
+                        print(f"   Детали: {traceback.format_exc()}")
+                
+                if brand_items_retail_lazy is not None:
+                    try:
+                        brand_retail_items = brand_items_retail_lazy.limit(1000).collect()
+                        if brand_retail_items.height > 0:
+                            # Проверяем наличие категорий в загруженных товарах
+                            has_category_col = any(col.lower() in ["category", "category_id"] for col in brand_retail_items.columns)
+                            if has_category_col:
+                                category_col = [col for col in brand_retail_items.columns if col.lower() in ["category", "category_id"]][0]
+                                non_null_categories = brand_retail_items.filter(pl.col(category_col).is_not_null()).height
+                                print(f"   📊 Retail: {brand_retail_items.height} товаров, {non_null_categories} с категориями")
+                            
+                            # Проверяем, какие brand_id есть в загруженных товарах
+                            if "brand_id" in brand_retail_items.columns:
+                                # Нормализуем brand_id для сравнения
+                                brand_retail_items_normalized = brand_retail_items.with_columns(
+                                    pl.col("brand_id").cast(pl.Utf8, strict=False).str.replace(r"\.0$", "").alias("brand_id_normalized")
+                                )
+                                unique_brands_in_items = brand_retail_items_normalized["brand_id_normalized"].drop_nulls().unique().to_list()
+                                print(f"   📊 Retail: уникальные brand_id в товарах: {unique_brands_in_items[:10]}")
+                                print(f"   📊 Retail: бренды пользователя: {user_brand_ids_normalized[:10]}")
+                                matching = [b for b in user_brand_ids_normalized if str(b) in [str(ub) for ub in unique_brands_in_items]]
+                                print(f"   📊 Retail: найдено совпадений: {len(matching)} из {len(user_brand_ids_normalized)}")
+                            
+                            if "retail" in items_catalog:
+                                # Объединяем с существующими
+                                items_catalog["retail"] = pl.concat([items_catalog["retail"], brand_retail_items]).unique(subset=["item_id"], keep="first")
+                                print(f"   ✅ Обновлен retail каталог: добавлено товаров для брендов пользователя")
+                            else:
+                                items_catalog["retail"] = brand_retail_items
+                                print(f"   ✅ Загружен retail каталог: {brand_retail_items.height} товаров для брендов")
+                        else:
+                            print(f"   ⚠ Retail: не найдено товаров для брендов {user_brand_ids_normalized[:3]}...")
+                            # Пробуем выяснить почему - проверяем есть ли вообще товары в retail
+                            try:
+                                all_retail_lazy = loader.load_retail_items(brand_ids=None, item_ids=None, use_lazy=True, include_embedding=False)
+                                if all_retail_lazy:
+                                    sample_retail = all_retail_lazy.limit(10).collect()
+                                    if sample_retail.height > 0 and "brand_id" in sample_retail.columns:
+                                        sample_brands = sample_retail["brand_id"].unique().to_list()
+                                        print(f"      Примеры brand_id в retail (всего): {sample_brands[:10]}")
+                            except:
+                                pass
+                    except Exception as e:
+                        print(f"   ⚠ Ошибка при загрузке retail товаров для брендов: {e}")
+                        import traceback
+                        print(f"   Детали: {traceback.format_exc()}")
+                        
+            except Exception as e:
+                print(f"   ⚠ Ошибка при дополнительной загрузке товаров для брендов: {e}")
+                import traceback
+                print(f"   Детали: {traceback.format_exc()}")
+        
+        # Теперь извлекаем категории брендов из обновленного items_catalog
+        # Обогащаем маппинг даже если он уже заполнен из brands.pq
+        # ВАЖНО: Это дополнительное извлечение категорий для конкретных брендов пользователя
+        if items_catalog and user_brand_ids_normalized:
+            try:
+                print(f"🔍 Извлечение категорий брендов для {len(user_brand_ids_normalized)} брендов пользователя из items_catalog...")
+                print(f"   Brand IDs пользователя: {user_brand_ids_normalized[:5]}...")
+                
+                # Пробуем извлечь категории из обоих каталогов (retail и marketplace)
+                for catalog_name, catalog_df in items_catalog.items():
+                    if catalog_df.height > 0 and "brand_id" in catalog_df.columns:
+                        # Определяем колонку категории
+                        category_col = None
+                        for col in catalog_df.columns:
+                            if col.lower() in ["category", "category_id"]:
+                                category_col = col
+                                break
+                        
+                        if category_col:
+                            print(f"   📦 Проверка каталога {catalog_name}: {catalog_df.height} товаров, колонка категории: {category_col}")
+                            
+                            # Нормализуем brand_id в каталоге для сравнения
+                            # Простой подход: приводим к строке и удаляем .0
+                            catalog_df_normalized = catalog_df.with_columns(
+                                pl.col("brand_id").cast(pl.Utf8, strict=False).str.replace(r"\.0$", "").alias("brand_id_normalized")
+                            )
+                            
+                            # Нормализуем user_brand_ids аналогично
+                            user_brand_ids_for_filter = [str(b).replace(".0", "") if b else None for b in user_brand_ids_normalized]
+                            user_brand_ids_for_filter = [b for b in user_brand_ids_for_filter if b and b != "nan" and b != "null" and b != ""]
+                            
+                            # Проверяем наличие брендов пользователя в каталоге
+                            unique_brands_in_catalog = catalog_df_normalized["brand_id_normalized"].drop_nulls().unique().to_list()
+                            unique_brands_str = [str(b).replace(".0", "") if b else None for b in unique_brands_in_catalog]
+                            unique_brands_clean = [b for b in unique_brands_str if b and b != "nan" and b != "null" and b != ""]
+                            
+                            matching_brands = [b for b in user_brand_ids_for_filter if b in unique_brands_clean]
+                            print(f"      Найдено совпадений брендов: {len(matching_brands)} из {len(user_brand_ids_for_filter)}")
+                            if matching_brands:
+                                print(f"      Совпадающие бренды: {matching_brands[:5]}...")
+                            else:
+                                print(f"      Бренды пользователя: {user_brand_ids_for_filter[:5]}...")
+                                print(f"      Бренды в каталоге (примеры): {unique_brands_clean[:10]}...")
+                            
+                            # Фильтруем по brand_id пользователя
+                            # Используем оригинальные user_brand_ids_normalized, но также пробуем все варианты
+                            catalog_filtered = catalog_df_normalized.filter(
+                                pl.col("brand_id_normalized").is_in(user_brand_ids_for_filter)
+                            )
+                            
+                            # Если ничего не нашли, пробуем без нормализации (на случай если они уже строки)
+                            if catalog_filtered.height == 0:
+                                print(f"      ⚠ Фильтрация по нормализованным ID не дала результатов, пробуем оригинальные значения...")
+                                catalog_filtered = catalog_df.filter(
+                                    pl.col("brand_id").cast(pl.Utf8, strict=False).is_in([str(b) for b in user_brand_ids_normalized if b])
+                                )
+                            
+                            if catalog_filtered.height > 0:
+                                print(f"   📦 Найдено {catalog_filtered.height} товаров в {catalog_name} для брендов пользователя")
+                                
+                                # Проверяем, сколько товаров с непустыми категориями
+                                items_with_categories = catalog_filtered.filter(
+                                    pl.col(category_col).is_not_null() & 
+                                    (pl.col(category_col).cast(pl.Utf8) != "") &
+                                    (pl.col(category_col).cast(pl.Utf8) != "null") &
+                                    (pl.col(category_col).cast(pl.Utf8) != "nan")
+                                )
+                                print(f"      Товаров с категориями: {items_with_categories.height} из {catalog_filtered.height}")
+                                
+                                if items_with_categories.height > 0:
+                                    # Группируем по brand_id и находим самую частую категорию
+                                    brand_categories = items_with_categories.group_by("brand_id_normalized").agg([
+                                        pl.col(category_col).mode().alias("top_category"),
+                                        pl.count().alias("item_count")
+                                    ]).filter(
+                                        pl.col("top_category").is_not_null()
+                                    )
+                                    
+                                    # Добавляем в маппинг
+                                    catalog_found_count = 0
+                                    for row in brand_categories.iter_rows(named=True):
+                                        brand_id = str(row.get("brand_id_normalized", ""))
+                                        # Дополнительная нормализация
+                                        if brand_id.endswith(".0"):
+                                            brand_id = brand_id[:-2]
+                                        
+                                        top_categories = row.get("top_category", [])
+                                        if brand_id and top_categories and len(top_categories) > 0:
+                                            category = str(top_categories[0])
+                                            if category and category.lower() not in ["none", "null", "nan", ""]:
+                                                # Обновляем маппинг (перезаписываем если уже есть)
+                                                brands_categories_map[brand_id] = category
+                                                catalog_found_count += 1
+                                                print(f"      ✅ Бренд {brand_id}: категория '{category}' (найдено {row.get('item_count', 0)} товаров)")
+                                    
+                                    print(f"   ✅ Извлечено категорий из {catalog_name}: {catalog_found_count} брендов")
+                                else:
+                                    # Пробуем найти любые категории, даже если они пустые
+                                    sample_categories = catalog_filtered.select([category_col, "brand_id_normalized"]).head(10)
+                                    print(f"      ⚠ Проблема: все категории пустые или null для этого каталога")
+                                    print(f"      Примеры данных: {sample_categories}")
+                            else:
+                                print(f"   ⚠ В каталоге {catalog_name} не найдено товаров для брендов пользователя")
+                                # Диагностика: проверяем общее количество товаров в каталоге
+                                if catalog_df.height > 0:
+                                    total_brands_in_catalog = catalog_df["brand_id"].n_unique() if "brand_id" in catalog_df.columns else 0
+                                    print(f"      Всего товаров в каталоге: {catalog_df.height}, уникальных брендов: {total_brands_in_catalog}")
+                                    if "brand_id" in catalog_df.columns:
+                                        sample_brands = catalog_df["brand_id"].drop_nulls().unique().head(10).to_list()
+                                        print(f"      Примеры brand_id в каталоге: {sample_brands}")
+                
+                if brands_categories_map:
+                    # Подсчитываем сколько из брендов пользователя нашли
+                    found_for_user = len([b for b in user_brand_ids_normalized if b in brands_categories_map])
+                    print(f"✅ Всего категорий брендов для пользователя: {found_for_user} из {len(user_brand_ids_normalized)}")
+                    if found_for_user > 0:
+                        print(f"   Примеры: {list(brands_categories_map.items())[:3]}")
+                    if found_for_user < len(user_brand_ids_normalized):
+                        missing = [b for b in user_brand_ids_normalized if b not in brands_categories_map]
+                        print(f"   ⚠ Не найдено категорий для брендов: {missing}")
+                        
+                        # ПОСЛЕДНЯЯ ПОПЫТКА: Загружаем категории напрямую из items.pq для недостающих брендов
+                        if missing:
+                            print(f"   🔍 Последняя попытка: загрузка категорий напрямую из items.pq для {len(missing)} брендов...")
+                            try:
+                                # Загружаем товары напрямую из items.pq для недостающих брендов
+                                for missing_brand_id in missing[:10]:  # Ограничиваем до 10 для производительности
+                                    try:
+                                        # Пробуем загрузить из marketplace
+                                        brand_items_mp = loader.load_marketplace_items(
+                                            brand_ids=[str(missing_brand_id)],
+                                            item_ids=None,
+                                            use_lazy=False,
+                                            include_embedding=False
+                                        )
+                                        if brand_items_mp is not None and brand_items_mp.height > 0:
+                                            # Ищем колонку категории
+                                            category_col_mp = None
+                                            for col in brand_items_mp.columns:
+                                                if col.lower() in ["category", "category_id"]:
+                                                    category_col_mp = col
+                                                    break
+                                            
+                                            if category_col_mp:
+                                                # Находим самую частую категорию для этого бренда
+                                                brand_cat = brand_items_mp.filter(
+                                                    pl.col(category_col_mp).is_not_null()
+                                                ).group_by(category_col_mp).agg([
+                                                    pl.count().alias("count")
+                                                ]).sort("count", descending=True).head(1)
+                                                
+                                                if brand_cat.height > 0:
+                                                    category = str(brand_cat[category_col_mp][0])
+                                                    if category and category.lower() not in ["none", "null", "nan", ""]:
+                                                        brands_categories_map[str(missing_brand_id)] = category
+                                                        print(f"      ✅ Бренд {missing_brand_id}: категория '{category}' (из marketplace)")
+                                                        continue
+                                        
+                                        # Если не нашли в marketplace, пробуем retail
+                                        brand_items_rt = loader.load_retail_items(
+                                            brand_ids=[str(missing_brand_id)],
+                                            item_ids=None,
+                                            use_lazy=False,
+                                            include_embedding=False
+                                        )
+                                        if brand_items_rt is not None and brand_items_rt.height > 0:
+                                            category_col_rt = None
+                                            for col in brand_items_rt.columns:
+                                                if col.lower() in ["category", "category_id"]:
+                                                    category_col_rt = col
+                                                    break
+                                            
+                                            if category_col_rt:
+                                                brand_cat = brand_items_rt.filter(
+                                                    pl.col(category_col_rt).is_not_null()
+                                                ).group_by(category_col_rt).agg([
+                                                    pl.count().alias("count")
+                                                ]).sort("count", descending=True).head(1)
+                                                
+                                                if brand_cat.height > 0:
+                                                    category = str(brand_cat[category_col_rt][0])
+                                                    if category and category.lower() not in ["none", "null", "nan", ""]:
+                                                        brands_categories_map[str(missing_brand_id)] = category
+                                                        print(f"      ✅ Бренд {missing_brand_id}: категория '{category}' (из retail)")
+                                    except Exception as e:
+                                        print(f"      ⚠ Ошибка при загрузке категории для бренда {missing_brand_id}: {e}")
+                                        continue
+                                
+                                # Финальная проверка
+                                final_found = len([b for b in user_brand_ids_normalized if b in brands_categories_map])
+                                if final_found > found_for_user:
+                                    print(f"   ✅ После прямой загрузки: найдено категорий для {final_found} из {len(user_brand_ids_normalized)} брендов")
+                            except Exception as e:
+                                print(f"   ⚠ Ошибка при прямой загрузке категорий: {e}")
+                else:
+                    print(f"⚠ Не найдено категорий ни для одного из {len(user_brand_ids_normalized)} брендов пользователя")
+            except Exception as e:
+                print(f"⚠ Ошибка при извлечении категорий брендов из items_catalog: {e}")
+                import traceback
+                print(f"   Детали: {traceback.format_exc()}")
         
         user_events = {
             "marketplace": user_marketplace,
